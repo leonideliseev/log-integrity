@@ -1,0 +1,41 @@
+# Go build artifacts
+/bin/
+/dist/
+/tmp/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.out
+
+# Go caches accidentally created inside the repository
+.gocache/
+.gomodcache/
+
+# Allure reports
+allure-results/
+allure-report/
+
+# Local configuration
+.env
+.env.*
+!.env.example
+config.yaml
+config.local.yaml
+
+# Docker/runtime data
+postgres_data/
+
+# IDE and OS files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Temporary Go/editor files
+*.go.[0-9]*

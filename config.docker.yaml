@@ -1,0 +1,48 @@
+server:
+  host: "${APP_HOST:-0.0.0.0}"
+  port: ${APP_PORT:-8080}
+
+api:
+  auth_token: "${API_AUTH_TOKEN:-}"
+
+security:
+  auth_value_encryption_key: "${AUTH_VALUE_ENCRYPTION_KEY}"
+  integrity_hmac_key: "${INTEGRITY_HMAC_KEY}"
+
+database:
+  host: "${DB_HOST:-postgres}"
+  port: ${DB_PORT:-5432}
+  user: "${DB_USER:-logmonitor}"
+  password: "${DB_PASSWORD:-logmonitor}"
+  dbname: "${DB_NAME:-logmonitor}"
+  sslmode: "${DB_SSLMODE:-disable}"
+  max_conns: ${DB_MAX_CONNS:-10}
+  min_conns: ${DB_MIN_CONNS:-1}
+  migrations_dir: "${DB_MIGRATIONS_DIR:-migrations}"
+
+ssh:
+  connect_timeout_seconds: ${SSH_CONNECT_TIMEOUT_SECONDS:-10}
+  command_timeout_seconds: ${SSH_COMMAND_TIMEOUT_SECONDS:-30}
+  known_hosts_path: "${SSH_KNOWN_HOSTS_PATH:-}"
+  insecure_ignore_host_key: ${SSH_INSECURE_IGNORE_HOST_KEY:-true}
+
+scheduler:
+  discovery_cron: "${DISCOVERY_CRON:-0 */6 * * *}"
+  collection_cron: "${COLLECTION_CRON:-*/5 * * * *}"
+  integrity_cron: "${INTEGRITY_CRON:-0 * * * *}"
+
+collector:
+  batch_size: ${COLLECTOR_BATCH_SIZE:-5000}
+  chunk_size: ${COLLECTOR_CHUNK_SIZE:-1000}
+  store_raw_content: ${COLLECTOR_STORE_RAW_CONTENT:-true}
+  chunk_hash_algo: "${COLLECTOR_CHUNK_HASH_ALGO:-sha256}"
+
+workers:
+  discovery_servers: ${WORKERS_DISCOVERY_SERVERS:-4}
+  collection_servers: ${WORKERS_COLLECTION_SERVERS:-4}
+  collection_log_files_per_host: ${WORKERS_COLLECTION_LOG_FILES_PER_HOST:-2}
+  integrity_servers: ${WORKERS_INTEGRITY_SERVERS:-2}
+  integrity_log_files_per_host: ${WORKERS_INTEGRITY_LOG_FILES_PER_HOST:-1}
+  per_server_isolation: ${WORKERS_PER_SERVER_ISOLATION:-true}
+
+servers: []

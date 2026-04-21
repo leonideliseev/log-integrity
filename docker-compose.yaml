@@ -1,0 +1,69 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ${APP_CONTAINER_NAME:-logmonitor-app}
+    env_file:
+      - .env
+    environment:
+      APP_HOST: "${APP_HOST:-0.0.0.0}"
+      APP_PORT: "${APP_PORT:-8080}"
+      API_AUTH_TOKEN: "${API_AUTH_TOKEN:-}"
+      AUTH_VALUE_ENCRYPTION_KEY: "${AUTH_VALUE_ENCRYPTION_KEY:-}"
+      INTEGRITY_HMAC_KEY: "${INTEGRITY_HMAC_KEY:-}"
+      DB_HOST: "postgres"
+      DB_PORT: "5432"
+      DB_USER: "${POSTGRES_USER:-logmonitor}"
+      DB_PASSWORD: "${POSTGRES_PASSWORD:-logmonitor}"
+      DB_NAME: "${POSTGRES_DB:-logmonitor}"
+      DB_SSLMODE: "${DB_SSLMODE:-disable}"
+      DB_MAX_CONNS: "${DB_MAX_CONNS:-10}"
+      DB_MIN_CONNS: "${DB_MIN_CONNS:-1}"
+      DB_MIGRATIONS_DIR: "${DB_MIGRATIONS_DIR:-migrations}"
+      SSH_CONNECT_TIMEOUT_SECONDS: "${SSH_CONNECT_TIMEOUT_SECONDS:-10}"
+      SSH_COMMAND_TIMEOUT_SECONDS: "${SSH_COMMAND_TIMEOUT_SECONDS:-30}"
+      SSH_KNOWN_HOSTS_PATH: "${SSH_KNOWN_HOSTS_PATH:-}"
+      SSH_INSECURE_IGNORE_HOST_KEY: "${SSH_INSECURE_IGNORE_HOST_KEY:-true}"
+      DISCOVERY_CRON: "${DISCOVERY_CRON:-0 */6 * * *}"
+      COLLECTION_CRON: "${COLLECTION_CRON:-*/5 * * * *}"
+      INTEGRITY_CRON: "${INTEGRITY_CRON:-0 * * * *}"
+      COLLECTOR_BATCH_SIZE: "${COLLECTOR_BATCH_SIZE:-5000}"
+      COLLECTOR_CHUNK_SIZE: "${COLLECTOR_CHUNK_SIZE:-1000}"
+      COLLECTOR_STORE_RAW_CONTENT: "${COLLECTOR_STORE_RAW_CONTENT:-true}"
+      COLLECTOR_CHUNK_HASH_ALGO: "${COLLECTOR_CHUNK_HASH_ALGO:-sha256}"
+      WORKERS_DISCOVERY_SERVERS: "${WORKERS_DISCOVERY_SERVERS:-4}"
+      WORKERS_COLLECTION_SERVERS: "${WORKERS_COLLECTION_SERVERS:-4}"
+      WORKERS_COLLECTION_LOG_FILES_PER_HOST: "${WORKERS_COLLECTION_LOG_FILES_PER_HOST:-2}"
+      WORKERS_INTEGRITY_SERVERS: "${WORKERS_INTEGRITY_SERVERS:-2}"
+      WORKERS_INTEGRITY_LOG_FILES_PER_HOST: "${WORKERS_INTEGRITY_LOG_FILES_PER_HOST:-1}"
+      WORKERS_PER_SERVER_ISOLATION: "${WORKERS_PER_SERVER_ISOLATION:-true}"
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:17-alpine
+    container_name: ${POSTGRES_CONTAINER_NAME:-logmonitor-postgres}
+    env_file:
+      - .env
+    environment:
+      POSTGRES_DB: "${POSTGRES_DB:-logmonitor}"
+      POSTGRES_USER: "${POSTGRES_USER:-logmonitor}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-logmonitor}"
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  postgres_data:

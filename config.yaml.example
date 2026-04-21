@@ -1,0 +1,55 @@
+server:
+  host: "0.0.0.0"
+  port: 8080
+
+api:
+  auth_token: ""
+
+security:
+  auth_value_encryption_key: "change-me-auth-value-encryption-key"
+  integrity_hmac_key: "change-me-integrity-hmac-key"
+
+database:
+  host: "localhost"
+  port: 5432
+  user: "postgres"
+  password: "postgres"
+  dbname: "logmonitor"
+  sslmode: "disable"
+  max_conns: 10
+  min_conns: 1
+  migrations_dir: "migrations"
+
+ssh:
+  connect_timeout_seconds: 10
+  command_timeout_seconds: 30
+  known_hosts_path: ""
+  insecure_ignore_host_key: true
+
+scheduler:
+  discovery_cron: "0 */6 * * *"
+  collection_cron: "*/5 * * * *"
+  integrity_cron: "0 * * * *"
+
+collector:
+  batch_size: 5000
+  chunk_size: 1000
+  store_raw_content: true
+  chunk_hash_algo: "sha256"
+
+workers:
+  discovery_servers: 4
+  collection_servers: 4
+  collection_log_files_per_host: 2
+  integrity_servers: 2
+  integrity_log_files_per_host: 1
+  per_server_isolation: true
+
+servers:
+  - name: "linux-demo"
+    host: "192.168.1.10"
+    port: 22
+    username: "root"
+    auth_type: "password"
+    auth_value: "secret"
+    os_type: "linux"

@@ -1,0 +1,9 @@
+.git
+.gocache
+.gomodcache
+tmp
+*.exe
+*.test
+*.log
+config.yaml
+.env
