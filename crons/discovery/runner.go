@@ -9,6 +9,7 @@ import (
 	"github.com/lenchik/logmonitor/crons/locks"
 	"github.com/lenchik/logmonitor/internal/repository"
 	discoveryservice "github.com/lenchik/logmonitor/internal/service/discovery"
+	healthservice "github.com/lenchik/logmonitor/internal/service/health"
 	"github.com/lenchik/logmonitor/models"
 )
 
@@ -22,6 +23,7 @@ type Runner struct {
 	logger      *slog.Logger
 	servers     repository.ServerRepository
 	discovery   *discoveryservice.Service
+	health      *healthservice.Service
 	lockManager *locks.Manager
 	options     Options
 }
@@ -33,11 +35,17 @@ func NewRunner(logger *slog.Logger, servers repository.ServerRepository, discove
 
 // NewRunnerWithOptions creates a cron runner with explicit concurrency settings.
 func NewRunnerWithOptions(logger *slog.Logger, servers repository.ServerRepository, discovery *discoveryservice.Service, lockManager *locks.Manager, options Options) *Runner {
+	return NewRunnerWithHealthAndOptions(logger, servers, discovery, healthservice.NewService(servers, healthservice.Options{}), lockManager, options)
+}
+
+// NewRunnerWithHealthAndOptions creates a cron runner with health tracking and explicit concurrency settings.
+func NewRunnerWithHealthAndOptions(logger *slog.Logger, servers repository.ServerRepository, discovery *discoveryservice.Service, health *healthservice.Service, lockManager *locks.Manager, options Options) *Runner {
 	options = normalizeOptions(options)
 	return &Runner{
 		logger:      logger,
 		servers:     servers,
 		discovery:   discovery,
+		health:      health,
 		lockManager: lockManager,
 		options:     options,
 	}
@@ -81,6 +89,10 @@ func (r *Runner) processServer(ctx context.Context, serverModel *models.Server) 
 		r.logger.Debug("skip discovery because server is inactive", "server", serverModel.Name)
 		return
 	}
+	if r.health.ShouldSkip(serverModel) {
+		r.logger.Debug("skip discovery because server is in backoff", "server", serverModel.Name, "backoff_until", serverModel.BackoffUntil)
+		return
+	}
 
 	unlock, ok := r.tryLockServer(serverModel)
 	if !ok {
@@ -90,11 +102,11 @@ func (r *Runner) processServer(ctx context.Context, serverModel *models.Server) 
 	defer unlock()
 
 	if _, err := r.discovery.DiscoverAndSync(ctx, serverModel); err != nil {
-		_ = r.servers.UpdateServerStatus(ctx, serverModel.ID, models.ServerStatusError)
+		_ = r.health.RecordFailure(ctx, serverModel, err)
 		r.logger.Error("discover logs", "server", serverModel.Name, "error", err)
 		return
 	}
-	_ = r.servers.UpdateServerStatus(ctx, serverModel.ID, models.ServerStatusActive)
+	_ = r.health.RecordSuccess(ctx, serverModel.ID)
 }
 
 // tryLockServer acquires a non-blocking server lock when isolation is enabled.

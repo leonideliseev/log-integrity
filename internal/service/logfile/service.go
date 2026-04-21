@@ -7,6 +7,7 @@ import (
 
 	"github.com/lenchik/logmonitor/internal/repository"
 	collectservice "github.com/lenchik/logmonitor/internal/service/collector"
+	healthservice "github.com/lenchik/logmonitor/internal/service/health"
 	"github.com/lenchik/logmonitor/models"
 )
 
@@ -21,6 +22,7 @@ type Service struct {
 	servers   repository.ServerRepository
 	logFiles  repository.LogFileRepository
 	collector *collectservice.Service
+	health    *healthservice.Service
 	locker    ServerLocker
 }
 
@@ -36,10 +38,16 @@ func NewService(servers repository.ServerRepository, logFiles repository.LogFile
 
 // NewServiceWithLocker creates a log file application service with optional server isolation.
 func NewServiceWithLocker(servers repository.ServerRepository, logFiles repository.LogFileRepository, collector *collectservice.Service, locker ServerLocker) *Service {
+	return NewServiceWithHealthAndLocker(servers, logFiles, collector, healthservice.NewService(servers, healthservice.Options{}), locker)
+}
+
+// NewServiceWithHealthAndLocker creates a log file service with health tracking and optional isolation.
+func NewServiceWithHealthAndLocker(servers repository.ServerRepository, logFiles repository.LogFileRepository, collector *collectservice.Service, health *healthservice.Service, locker ServerLocker) *Service {
 	return &Service{
 		servers:   servers,
 		logFiles:  logFiles,
 		collector: collector,
+		health:    health,
 		locker:    locker,
 	}
 }
@@ -70,13 +78,25 @@ func (s *Service) Collect(ctx context.Context, serverID, logFileID string) (map[
 	}
 
 	result := make(map[string]CollectResult, len(logFiles))
+	success := true
+	var firstErr error
 	for _, logFile := range logFiles {
 		count, collectErr := s.collector.CollectLogFile(ctx, serverModel, logFile)
 		if collectErr != nil {
+			if firstErr == nil {
+				firstErr = collectErr
+			}
+			success = false
 			result[logFile.ID] = CollectResult{Error: collectErr.Error()}
 			continue
 		}
 		result[logFile.ID] = CollectResult{CollectedEntries: count}
+	}
+
+	if success {
+		_ = s.health.RecordSuccess(ctx, serverModel.ID)
+	} else {
+		_ = s.health.RecordFailure(ctx, serverModel, firstErr)
 	}
 
 	return result, nil

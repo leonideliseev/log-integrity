@@ -31,6 +31,14 @@ func newID(prefix string) string {
 // cloneServer returns a detached copy of the server model.
 func cloneServer(in *models.Server) *models.Server {
 	copyModel := *in
+	if in.LastSeenAt != nil {
+		lastSeenAt := *in.LastSeenAt
+		copyModel.LastSeenAt = &lastSeenAt
+	}
+	if in.BackoffUntil != nil {
+		backoffUntil := *in.BackoffUntil
+		copyModel.BackoffUntil = &backoffUntil
+	}
 	return &copyModel
 }
 

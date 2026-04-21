@@ -10,6 +10,7 @@ type Config struct {
 	SSH       SSHConfig       `yaml:"ssh"`
 	Scheduler SchedulerConfig `yaml:"scheduler"`
 	Collector CollectorConfig `yaml:"collector"`
+	Health    HealthConfig    `yaml:"health"`
 	Workers   WorkerConfig    `yaml:"workers"`
 	Servers   []ServerEntry   `yaml:"servers"`
 }
@@ -58,6 +59,14 @@ type CollectorConfig struct {
 	ChunkSize       int    `yaml:"chunk_size"`
 	StoreRawContent *bool  `yaml:"store_raw_content"`
 	ChunkHashAlgo   string `yaml:"chunk_hash_algo"`
+}
+
+// HealthConfig stores server availability lifecycle settings.
+type HealthConfig struct {
+	FailureThreshold   int `yaml:"failure_threshold"`
+	BackoffBaseSeconds int `yaml:"backoff_base_seconds"`
+	BackoffMaxSeconds  int `yaml:"backoff_max_seconds"`
+	LastErrorMaxLength int `yaml:"last_error_max_length"`
 }
 
 // WorkerConfig stores bounded concurrency settings for background jobs.

@@ -55,5 +55,17 @@ func (c *Config) validate() error {
 	if c.Scheduler.IntegrityCron == "" {
 		c.Scheduler.IntegrityCron = "0 * * * *"
 	}
+	if c.Health.FailureThreshold == 0 {
+		c.Health.FailureThreshold = 1
+	}
+	if c.Health.BackoffBaseSeconds == 0 {
+		c.Health.BackoffBaseSeconds = 60
+	}
+	if c.Health.BackoffMaxSeconds == 0 {
+		c.Health.BackoffMaxSeconds = 900
+	}
+	if c.Health.LastErrorMaxLength == 0 {
+		c.Health.LastErrorMaxLength = 2048
+	}
 	return nil
 }

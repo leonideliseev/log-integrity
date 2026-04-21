@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lenchik/logmonitor/internal/repository"
 	postgresrepo "github.com/lenchik/logmonitor/internal/repository/postgres"
@@ -50,6 +51,21 @@ func TestPostgresRepositoryIntegrationLifecycle(t *testing.T) {
 	mustNoError(t, err)
 	if storedServer.Status != models.ServerStatusError {
 		t.Fatalf("expected server status error, got %q", storedServer.Status)
+	}
+
+	backoffUntil := time.Now().UTC().Add(time.Minute)
+	mustNoError(t, store.RecordServerFailure(ctx, serverModel.ID, "ssh: connection refused", &backoffUntil))
+	storedServer, err = store.GetServerByID(ctx, serverModel.ID)
+	mustNoError(t, err)
+	if storedServer.FailureCount != 1 || storedServer.LastError == "" || storedServer.BackoffUntil == nil {
+		t.Fatalf("expected failed health state, got failure_count=%d last_error=%q backoff_until=%v", storedServer.FailureCount, storedServer.LastError, storedServer.BackoffUntil)
+	}
+
+	mustNoError(t, store.RecordServerSuccess(ctx, serverModel.ID, time.Now().UTC()))
+	storedServer, err = store.GetServerByID(ctx, serverModel.ID)
+	mustNoError(t, err)
+	if storedServer.SuccessCount != 1 || storedServer.FailureCount != 0 || storedServer.LastSeenAt == nil || storedServer.LastError != "" || storedServer.BackoffUntil != nil {
+		t.Fatalf("expected successful health state, got success_count=%d failure_count=%d last_seen_at=%v last_error=%q backoff_until=%v", storedServer.SuccessCount, storedServer.FailureCount, storedServer.LastSeenAt, storedServer.LastError, storedServer.BackoffUntil)
 	}
 
 	logFile := &models.LogFile{

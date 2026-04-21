@@ -27,17 +27,22 @@ type createServerRequest struct {
 }
 
 type serverResponse struct {
-	ID        string                 `json:"id"`
-	Name      string                 `json:"name"`
-	Host      string                 `json:"host"`
-	Port      int                    `json:"port"`
-	Username  string                 `json:"username"`
-	AuthType  models.AuthType        `json:"auth_type"`
-	OSType    models.OSType          `json:"os_type"`
-	Status    models.ServerStatus    `json:"status"`
-	ManagedBy models.ServerManagedBy `json:"managed_by"`
-	CreatedAt time.Time              `json:"created_at"`
-	UpdatedAt time.Time              `json:"updated_at"`
+	ID           string                 `json:"id"`
+	Name         string                 `json:"name"`
+	Host         string                 `json:"host"`
+	Port         int                    `json:"port"`
+	Username     string                 `json:"username"`
+	AuthType     models.AuthType        `json:"auth_type"`
+	OSType       models.OSType          `json:"os_type"`
+	Status       models.ServerStatus    `json:"status"`
+	ManagedBy    models.ServerManagedBy `json:"managed_by"`
+	SuccessCount int64                  `json:"success_count"`
+	FailureCount int64                  `json:"failure_count"`
+	LastError    string                 `json:"last_error,omitempty"`
+	LastSeenAt   *time.Time             `json:"last_seen_at,omitempty"`
+	BackoffUntil *time.Time             `json:"backoff_until,omitempty"`
+	CreatedAt    time.Time              `json:"created_at"`
+	UpdatedAt    time.Time              `json:"updated_at"`
 }
 
 // NewServerHandler creates a server handler with required dependencies.
@@ -153,16 +158,21 @@ func serverResponses(items []*models.Server) []serverResponse {
 
 func newServerResponse(serverModel *models.Server) serverResponse {
 	return serverResponse{
-		ID:        serverModel.ID,
-		Name:      serverModel.Name,
-		Host:      serverModel.Host,
-		Port:      serverModel.Port,
-		Username:  serverModel.Username,
-		AuthType:  serverModel.AuthType,
-		OSType:    serverModel.OSType,
-		Status:    serverModel.Status,
-		ManagedBy: serverModel.ManagedBy,
-		CreatedAt: serverModel.CreatedAt,
-		UpdatedAt: serverModel.UpdatedAt,
+		ID:           serverModel.ID,
+		Name:         serverModel.Name,
+		Host:         serverModel.Host,
+		Port:         serverModel.Port,
+		Username:     serverModel.Username,
+		AuthType:     serverModel.AuthType,
+		OSType:       serverModel.OSType,
+		Status:       serverModel.Status,
+		ManagedBy:    serverModel.ManagedBy,
+		SuccessCount: serverModel.SuccessCount,
+		FailureCount: serverModel.FailureCount,
+		LastError:    serverModel.LastError,
+		LastSeenAt:   serverModel.LastSeenAt,
+		BackoffUntil: serverModel.BackoffUntil,
+		CreatedAt:    serverModel.CreatedAt,
+		UpdatedAt:    serverModel.UpdatedAt,
 	}
 }

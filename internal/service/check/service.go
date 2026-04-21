@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/lenchik/logmonitor/internal/repository"
+	healthservice "github.com/lenchik/logmonitor/internal/service/health"
 	integrityservice "github.com/lenchik/logmonitor/internal/service/integrity"
 	"github.com/lenchik/logmonitor/models"
 )
@@ -23,6 +24,7 @@ type Service struct {
 	logFiles  repository.LogFileRepository
 	checks    repository.CheckResultRepository
 	integrity *integrityservice.Service
+	health    *healthservice.Service
 	locker    ServerLocker
 }
 
@@ -38,11 +40,17 @@ func NewService(servers repository.ServerRepository, logFiles repository.LogFile
 
 // NewServiceWithLocker creates a check application service with optional server isolation.
 func NewServiceWithLocker(servers repository.ServerRepository, logFiles repository.LogFileRepository, checks repository.CheckResultRepository, integrity *integrityservice.Service, locker ServerLocker) *Service {
+	return NewServiceWithHealthAndLocker(servers, logFiles, checks, integrity, healthservice.NewService(servers, healthservice.Options{}), locker)
+}
+
+// NewServiceWithHealthAndLocker creates a check service with health tracking and optional isolation.
+func NewServiceWithHealthAndLocker(servers repository.ServerRepository, logFiles repository.LogFileRepository, checks repository.CheckResultRepository, integrity *integrityservice.Service, health *healthservice.Service, locker ServerLocker) *Service {
 	return &Service{
 		servers:   servers,
 		logFiles:  logFiles,
 		checks:    checks,
 		integrity: integrity,
+		health:    health,
 		locker:    locker,
 	}
 }
@@ -70,9 +78,15 @@ func (s *Service) Run(ctx context.Context, serverID, logFileID string) (map[stri
 	}
 
 	result := make(map[string]RunResult, len(logFiles))
+	success := true
+	var firstErr error
 	for _, logFile := range logFiles {
 		checkResult, tamperedEntries, checkErr := s.integrity.CheckLogFile(ctx, serverModel, logFile)
 		if checkErr != nil {
+			if firstErr == nil {
+				firstErr = checkErr
+			}
+			success = false
 			result[logFile.ID] = RunResult{Error: checkErr.Error()}
 			continue
 		}
@@ -80,6 +94,12 @@ func (s *Service) Run(ctx context.Context, serverID, logFileID string) (map[stri
 			Result:          checkResult,
 			TamperedEntries: tamperedEntries,
 		}
+	}
+
+	if success {
+		_ = s.health.RecordSuccess(ctx, serverModel.ID)
+	} else {
+		_ = s.health.RecordFailure(ctx, serverModel, firstErr)
 	}
 
 	return result, nil

@@ -23,6 +23,7 @@ import (
 	collectservice "github.com/lenchik/logmonitor/internal/service/collector"
 	discoveryservice "github.com/lenchik/logmonitor/internal/service/discovery"
 	entryappservice "github.com/lenchik/logmonitor/internal/service/entry"
+	healthservice "github.com/lenchik/logmonitor/internal/service/health"
 	integrityservice "github.com/lenchik/logmonitor/internal/service/integrity"
 	logfileappservice "github.com/lenchik/logmonitor/internal/service/logfile"
 	serverappservice "github.com/lenchik/logmonitor/internal/service/server"
@@ -42,6 +43,7 @@ type App struct {
 	discovery *discoveryservice.Service
 	collector *collectservice.Service
 	integrity *integrityservice.Service
+	health    *healthservice.Service
 	locks     *locks.Manager
 }
 
@@ -73,11 +75,17 @@ func New(cfg *config.Config) (*App, error) {
 	integrityService := integrityservice.NewServiceWithOptions(sshFactory, store, store, store, integrityservice.Options{
 		IntegrityHMACKey: cfg.Security.IntegrityHMACKey,
 	})
+	healthService := healthservice.NewService(store, healthservice.Options{
+		FailureThreshold:   cfg.Health.FailureThreshold,
+		BackoffBase:        time.Duration(cfg.Health.BackoffBaseSeconds) * time.Second,
+		BackoffMax:         time.Duration(cfg.Health.BackoffMaxSeconds) * time.Second,
+		LastErrorMaxLength: cfg.Health.LastErrorMaxLength,
+	})
 	lockManager := buildLockManager(cfg)
-	serverService := serverappservice.NewServiceWithLocker(store, discoveryService, lockManager)
-	logFileService := logfileappservice.NewServiceWithLocker(store, store, collectorService, lockManager)
+	serverService := serverappservice.NewServiceWithHealthAndLocker(store, discoveryService, healthService, lockManager)
+	logFileService := logfileappservice.NewServiceWithHealthAndLocker(store, store, collectorService, healthService, lockManager)
 	entryService := entryappservice.NewService(store)
-	checkService := checkappservice.NewServiceWithLocker(store, store, store, integrityService, lockManager)
+	checkService := checkappservice.NewServiceWithHealthAndLocker(store, store, store, integrityService, healthService, lockManager)
 
 	address := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	apiServer := api.NewServer(address, log, cfg.API.AuthToken, serverService, logFileService, entryService, checkService)
@@ -91,6 +99,7 @@ func New(cfg *config.Config) (*App, error) {
 		discovery: discoveryService,
 		collector: collectorService,
 		integrity: integrityService,
+		health:    healthService,
 		locks:     lockManager,
 	}
 
@@ -172,6 +181,11 @@ func (a *App) seedServers(ctx context.Context) error {
 			serverModel.ID = current.ID
 			serverModel.CreatedAt = current.CreatedAt
 			serverModel.Status = current.Status
+			serverModel.SuccessCount = current.SuccessCount
+			serverModel.FailureCount = current.FailureCount
+			serverModel.LastError = current.LastError
+			serverModel.LastSeenAt = current.LastSeenAt
+			serverModel.BackoffUntil = current.BackoffUntil
 			if serverModel.Status == "" {
 				serverModel.Status = models.ServerStatusActive
 			}
@@ -208,20 +222,20 @@ func (a *App) registerJobs() error {
 		return err
 	}
 
-	discoveryRunner := discoverycron.NewRunnerWithOptions(a.logger, a.repo, a.discovery, a.locks, discoverycron.Options{
+	discoveryRunner := discoverycron.NewRunnerWithHealthAndOptions(a.logger, a.repo, a.discovery, a.health, a.locks, discoverycron.Options{
 		MaxServerWorkers: a.cfg.Workers.DiscoveryServers,
 	})
 	if err := a.scheduler.AddFunc("discovery", discoveryInterval, discoveryRunner.Run); err != nil {
 		return err
 	}
-	collectionRunner := collectioncron.NewRunnerWithOptions(a.logger, a.repo, a.repo, a.collector, a.locks, collectioncron.Options{
+	collectionRunner := collectioncron.NewRunnerWithHealthAndOptions(a.logger, a.repo, a.repo, a.collector, a.health, a.locks, collectioncron.Options{
 		MaxServerWorkers:         a.cfg.Workers.CollectionServers,
 		MaxLogFileWorkersPerHost: a.cfg.Workers.CollectionLogFilesPerHost,
 	})
 	if err := a.scheduler.AddFunc("collection", collectionInterval, collectionRunner.Run); err != nil {
 		return err
 	}
-	integrityRunner := integritycron.NewRunnerWithOptions(a.logger, a.repo, a.repo, a.integrity, a.locks, integritycron.Options{
+	integrityRunner := integritycron.NewRunnerWithHealthAndOptions(a.logger, a.repo, a.repo, a.integrity, a.health, a.locks, integritycron.Options{
 		MaxServerWorkers:         a.cfg.Workers.IntegrityServers,
 		MaxLogFileWorkersPerHost: a.cfg.Workers.IntegrityLogFilesPerHost,
 	})

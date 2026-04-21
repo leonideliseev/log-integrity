@@ -37,6 +37,12 @@ collector:
   store_raw_content: true
   chunk_hash_algo: "sha256"
 
+health:
+  failure_threshold: 1
+  backoff_base_seconds: 60
+  backoff_max_seconds: 900
+  last_error_max_length: 2048
+
 workers:
   discovery_servers: 4
   collection_servers: 4

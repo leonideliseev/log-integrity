@@ -8,6 +8,7 @@ import (
 
 	"github.com/lenchik/logmonitor/internal/repository"
 	discoveryservice "github.com/lenchik/logmonitor/internal/service/discovery"
+	healthservice "github.com/lenchik/logmonitor/internal/service/health"
 	"github.com/lenchik/logmonitor/models"
 )
 
@@ -21,6 +22,7 @@ type DiscoverResult struct {
 type Service struct {
 	servers   repository.ServerRepository
 	discovery *discoveryservice.Service
+	health    *healthservice.Service
 	locker    Locker
 }
 
@@ -36,9 +38,15 @@ func NewService(servers repository.ServerRepository, discovery *discoveryservice
 
 // NewServiceWithLocker creates a server application service with optional server isolation.
 func NewServiceWithLocker(servers repository.ServerRepository, discovery *discoveryservice.Service, locker Locker) *Service {
+	return NewServiceWithHealthAndLocker(servers, discovery, healthservice.NewService(servers, healthservice.Options{}), locker)
+}
+
+// NewServiceWithHealthAndLocker creates a server application service with health tracking and optional isolation.
+func NewServiceWithHealthAndLocker(servers repository.ServerRepository, discovery *discoveryservice.Service, health *healthservice.Service, locker Locker) *Service {
 	return &Service{
 		servers:   servers,
 		discovery: discovery,
+		health:    health,
 		locker:    locker,
 	}
 }
@@ -82,9 +90,11 @@ func (s *Service) Discover(ctx context.Context, serverID string) (map[string]Dis
 		logFiles, discoverErr := s.discovery.DiscoverAndSync(ctx, serverModel)
 		unlock()
 		if discoverErr != nil {
+			_ = s.health.RecordFailure(ctx, serverModel, discoverErr)
 			result[serverModel.ID] = DiscoverResult{Error: discoverErr.Error()}
 			continue
 		}
+		_ = s.health.RecordSuccess(ctx, serverModel.ID)
 		result[serverModel.ID] = DiscoverResult{LogFiles: logFiles}
 	}
 

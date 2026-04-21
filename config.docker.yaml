@@ -37,6 +37,12 @@ collector:
   store_raw_content: ${COLLECTOR_STORE_RAW_CONTENT:-true}
   chunk_hash_algo: "${COLLECTOR_CHUNK_HASH_ALGO:-sha256}"
 
+health:
+  failure_threshold: ${HEALTH_FAILURE_THRESHOLD:-1}
+  backoff_base_seconds: ${HEALTH_BACKOFF_BASE_SECONDS:-60}
+  backoff_max_seconds: ${HEALTH_BACKOFF_MAX_SECONDS:-900}
+  last_error_max_length: ${HEALTH_LAST_ERROR_MAX_LENGTH:-2048}
+
 workers:
   discovery_servers: ${WORKERS_DISCOVERY_SERVERS:-4}
   collection_servers: ${WORKERS_COLLECTION_SERVERS:-4}

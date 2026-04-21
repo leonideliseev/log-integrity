@@ -110,6 +110,18 @@ func applyRuntimeDefaults(cfg *Config) {
 		defaultStoreRawContent := true
 		cfg.Collector.StoreRawContent = &defaultStoreRawContent
 	}
+	if cfg.Health.FailureThreshold == 0 {
+		cfg.Health.FailureThreshold = 1
+	}
+	if cfg.Health.BackoffBaseSeconds == 0 {
+		cfg.Health.BackoffBaseSeconds = 60
+	}
+	if cfg.Health.BackoffMaxSeconds == 0 {
+		cfg.Health.BackoffMaxSeconds = 900
+	}
+	if cfg.Health.LastErrorMaxLength == 0 {
+		cfg.Health.LastErrorMaxLength = 2048
+	}
 	if cfg.Workers.DiscoveryServers == 0 {
 		cfg.Workers.DiscoveryServers = 4
 	}
@@ -162,6 +174,21 @@ func validateRuntime(cfg *Config) error {
 	}
 	if cfg.Collector.ChunkHashAlgo != "" && cfg.Collector.ChunkHashAlgo != "sha256" {
 		return fmt.Errorf("collector.chunk_hash_algo %q is not supported", cfg.Collector.ChunkHashAlgo)
+	}
+	if cfg.Health.FailureThreshold < 0 {
+		return fmt.Errorf("health.failure_threshold must be greater than or equal to zero")
+	}
+	if cfg.Health.BackoffBaseSeconds < 0 {
+		return fmt.Errorf("health.backoff_base_seconds must be greater than or equal to zero")
+	}
+	if cfg.Health.BackoffMaxSeconds < 0 {
+		return fmt.Errorf("health.backoff_max_seconds must be greater than or equal to zero")
+	}
+	if cfg.Health.BackoffMaxSeconds > 0 && cfg.Health.BackoffBaseSeconds > cfg.Health.BackoffMaxSeconds {
+		return fmt.Errorf("health.backoff_base_seconds must be less than or equal to health.backoff_max_seconds")
+	}
+	if cfg.Health.LastErrorMaxLength < 0 {
+		return fmt.Errorf("health.last_error_max_length must be greater than or equal to zero")
 	}
 	if cfg.SSH.ConnectTimeoutSeconds < 0 {
 		return fmt.Errorf("ssh.connect_timeout_seconds must be greater than or equal to zero")

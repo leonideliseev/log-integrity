@@ -143,3 +143,46 @@ func (s *Storage) UpdateServerStatus(_ context.Context, id string, status models
 	serverModel.UpdatedAt = time.Now().UTC()
 	return nil
 }
+
+// RecordServerSuccess records a successful remote server operation.
+func (s *Storage) RecordServerSuccess(_ context.Context, id string, seenAt time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	serverModel, ok := s.servers[id]
+	if !ok {
+		return fmt.Errorf("%w: server %q", repository.ErrNotFound, id)
+	}
+
+	serverModel.Status = models.ServerStatusActive
+	serverModel.SuccessCount++
+	serverModel.FailureCount = 0
+	serverModel.LastError = ""
+	serverModel.LastSeenAt = &seenAt
+	serverModel.BackoffUntil = nil
+	serverModel.UpdatedAt = time.Now().UTC()
+	return nil
+}
+
+// RecordServerFailure records a failed remote server operation.
+func (s *Storage) RecordServerFailure(_ context.Context, id string, lastError string, backoffUntil *time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	serverModel, ok := s.servers[id]
+	if !ok {
+		return fmt.Errorf("%w: server %q", repository.ErrNotFound, id)
+	}
+
+	serverModel.Status = models.ServerStatusError
+	serverModel.FailureCount++
+	serverModel.LastError = lastError
+	if backoffUntil != nil {
+		backoffCopy := *backoffUntil
+		serverModel.BackoffUntil = &backoffCopy
+	} else {
+		serverModel.BackoffUntil = nil
+	}
+	serverModel.UpdatedAt = time.Now().UTC()
+	return nil
+}

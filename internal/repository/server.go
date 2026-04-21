@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"time"
 
 	"github.com/lenchik/logmonitor/models"
 )
@@ -14,4 +15,6 @@ type ServerRepository interface {
 	UpdateServer(ctx context.Context, server *models.Server) error
 	DeleteServer(ctx context.Context, id string) error
 	UpdateServerStatus(ctx context.Context, id string, status models.ServerStatus) error
+	RecordServerSuccess(ctx context.Context, id string, seenAt time.Time) error
+	RecordServerFailure(ctx context.Context, id string, lastError string, backoffUntil *time.Time) error
 }

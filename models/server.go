@@ -46,16 +46,21 @@ const (
 
 // Server represents a remote server whose logs are monitored.
 type Server struct {
-	ID        string          `json:"id"`
-	Name      string          `json:"name"`
-	Host      string          `json:"host"`
-	Port      int             `json:"port"`
-	Username  string          `json:"username"`
-	AuthType  AuthType        `json:"auth_type"`
-	AuthValue string          `json:"auth_value,omitempty"` // пароль или путь к приватному ключу
-	OSType    OSType          `json:"os_type"`
-	Status    ServerStatus    `json:"status"`
-	ManagedBy ServerManagedBy `json:"managed_by"`
-	CreatedAt time.Time       `json:"created_at"`
-	UpdatedAt time.Time       `json:"updated_at"`
+	ID           string          `json:"id"`
+	Name         string          `json:"name"`
+	Host         string          `json:"host"`
+	Port         int             `json:"port"`
+	Username     string          `json:"username"`
+	AuthType     AuthType        `json:"auth_type"`
+	AuthValue    string          `json:"auth_value,omitempty"` // пароль или путь к приватному ключу
+	OSType       OSType          `json:"os_type"`
+	Status       ServerStatus    `json:"status"`
+	ManagedBy    ServerManagedBy `json:"managed_by"`
+	SuccessCount int64           `json:"success_count"`
+	FailureCount int64           `json:"failure_count"`
+	LastError    string          `json:"last_error,omitempty"`
+	LastSeenAt   *time.Time      `json:"last_seen_at,omitempty"`
+	BackoffUntil *time.Time      `json:"backoff_until,omitempty"`
+	CreatedAt    time.Time       `json:"created_at"`
+	UpdatedAt    time.Time       `json:"updated_at"`
 }
