@@ -225,6 +225,216 @@ func TestPostgresRepositoryIntegrationConstraints(t *testing.T) {
 	}
 }
 
+func TestPostgresRepositoryIntegrationLogFileMutationPaginationAndCleanup(t *testing.T) {
+	ctx := context.Background()
+	store := newPostgresRepository(t, ctx)
+	serverModel := createIntegrationServer(t, ctx, store, "srv-it-logfile-flow", "logfile-flow", "192.0.2.30")
+
+	activeLog := &models.LogFile{
+		ID:       "log-it-active",
+		ServerID: serverModel.ID,
+		Path:     "/var/log/app.log",
+		LogType:  models.LogTypeApp,
+		IsActive: true,
+		Meta:     map[string]string{"service": "app"},
+	}
+	inactiveLog := &models.LogFile{
+		ID:       "log-it-inactive",
+		ServerID: serverModel.ID,
+		Path:     "/var/log/old.log",
+		LogType:  models.LogTypeApp,
+		IsActive: false,
+	}
+	mustNoError(t, store.CreateLogFile(ctx, activeLog))
+	mustNoError(t, store.CreateLogFile(ctx, inactiveLog))
+
+	activeOnly, err := store.ListActiveLogFiles(ctx)
+	mustNoError(t, err)
+	if len(activeOnly) != 1 || activeOnly[0].ID != activeLog.ID {
+		t.Fatalf("expected only active log file, got %#v", activeOnly)
+	}
+
+	activeLog.FileIdentity = models.FileIdentity{DeviceID: "rotated-device", Inode: "rotated-inode", SizeBytes: 10}
+	activeLog.Meta["rotation"] = "detected"
+	activeLog.LastLineNumber = 0
+	activeLog.LastByteOffset = 0
+	mustNoError(t, store.UpdateLogFile(ctx, activeLog))
+	mustNoError(t, store.UpdateLastScanned(ctx, activeLog.ID))
+
+	updatedLog, err := store.GetLogFileByID(ctx, activeLog.ID)
+	mustNoError(t, err)
+	if updatedLog.FileIdentity.Inode != "rotated-inode" || updatedLog.Meta["rotation"] != "detected" || updatedLog.LastScannedAt == nil {
+		t.Fatalf("expected updated log file identity, meta and scan time, got %#v", updatedLog)
+	}
+
+	entries := make([]*models.LogEntry, 0, 5)
+	for line := int64(1); line <= 5; line++ {
+		entries = append(entries, &models.LogEntry{
+			ID:         "entry-it-page-" + string(rune('0'+line)),
+			LogFileID:  activeLog.ID,
+			LineNumber: line,
+			Content:    "line",
+			Hash:       "hash",
+		})
+	}
+	mustNoError(t, store.CreateLogEntries(ctx, entries))
+
+	page, err := store.ListLogEntries(ctx, activeLog.ID, 2, 2)
+	mustNoError(t, err)
+	if len(page) != 2 || page[0].LineNumber != 3 || page[1].LineNumber != 4 {
+		t.Fatalf("expected paginated lines 3 and 4, got %#v", page)
+	}
+
+	rangeEntries, err := store.ListLogEntriesByLineRange(ctx, activeLog.ID, 2, 4)
+	mustNoError(t, err)
+	if len(rangeEntries) != 3 || rangeEntries[0].LineNumber != 2 || rangeEntries[2].LineNumber != 4 {
+		t.Fatalf("expected inclusive range 2..4, got %#v", rangeEntries)
+	}
+
+	chunks := []*models.LogChunk{
+		newIntegrationChunk("chunk-it-page-1", activeLog.ID, 1, 1, 2),
+		newIntegrationChunk("chunk-it-page-2", activeLog.ID, 2, 3, 4),
+		newIntegrationChunk("chunk-it-page-3", activeLog.ID, 3, 5, 5),
+	}
+	mustNoError(t, store.CreateLogChunks(ctx, chunks))
+
+	chunkPage, err := store.ListLogChunks(ctx, activeLog.ID, 1, 1)
+	mustNoError(t, err)
+	if len(chunkPage) != 1 || chunkPage[0].ChunkNumber != 2 {
+		t.Fatalf("expected second chunk page, got %#v", chunkPage)
+	}
+
+	latestChunk, err := store.GetLatestLogChunk(ctx, activeLog.ID)
+	mustNoError(t, err)
+	if latestChunk.ChunkNumber != 3 {
+		t.Fatalf("expected latest chunk number 3, got %d", latestChunk.ChunkNumber)
+	}
+
+	mustNoError(t, store.DeleteLogEntriesByLogFile(ctx, activeLog.ID))
+	count, err := store.CountLogEntries(ctx, activeLog.ID)
+	mustNoError(t, err)
+	if count != 0 {
+		t.Fatalf("expected log entries cleanup, got %d entries", count)
+	}
+
+	mustNoError(t, store.DeleteLogChunksByLogFile(ctx, activeLog.ID))
+	_, err = store.GetLatestLogChunk(ctx, activeLog.ID)
+	if !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("expected latest chunk not found after cleanup, got %v", err)
+	}
+}
+
+func TestPostgresRepositoryIntegrationCheckResultOrdering(t *testing.T) {
+	ctx := context.Background()
+	store := newPostgresRepository(t, ctx)
+	serverModel := createIntegrationServer(t, ctx, store, "srv-it-checks", "checks-flow", "192.0.2.40")
+	logFile := createIntegrationLogFile(t, ctx, store, "log-it-checks", serverModel.ID, "/var/log/checks.log")
+
+	_, err := store.GetLatestCheckResult(ctx, logFile.ID)
+	if !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("expected latest check result not found before checks exist, got %v", err)
+	}
+
+	baseTime := time.Date(2026, 4, 22, 12, 0, 0, 0, time.UTC)
+	results := []*models.CheckResult{
+		{ID: "check-it-order-2", LogFileID: logFile.ID, CheckedAt: baseTime.Add(2 * time.Minute), Status: models.CheckStatusTampered, TotalLines: 10, TamperedLines: 1},
+		{ID: "check-it-order-1", LogFileID: logFile.ID, CheckedAt: baseTime.Add(time.Minute), Status: models.CheckStatusOK, TotalLines: 10},
+		{ID: "check-it-order-3", LogFileID: logFile.ID, CheckedAt: baseTime.Add(3 * time.Minute), Status: models.CheckStatusError, TotalLines: 0, ErrorMessage: "read failed"},
+	}
+	for _, result := range results {
+		mustNoError(t, store.CreateCheckResult(ctx, result))
+	}
+
+	historyPage, err := store.ListCheckResults(ctx, logFile.ID, 1, 2)
+	mustNoError(t, err)
+	if len(historyPage) != 2 || historyPage[0].ID != "check-it-order-2" || historyPage[1].ID != "check-it-order-3" {
+		t.Fatalf("expected chronological check history page, got %#v", historyPage)
+	}
+
+	latest, err := store.GetLatestCheckResult(ctx, logFile.ID)
+	mustNoError(t, err)
+	if latest.ID != "check-it-order-3" || latest.Status != models.CheckStatusError || latest.ErrorMessage != "read failed" {
+		t.Fatalf("expected latest error check result, got %#v", latest)
+	}
+}
+
+func TestPostgresRepositoryIntegrationBatchRollbackOnDuplicateLine(t *testing.T) {
+	ctx := context.Background()
+	store := newPostgresRepository(t, ctx)
+	serverModel := createIntegrationServer(t, ctx, store, "srv-it-batch-rollback", "batch-rollback", "192.0.2.50")
+	logFile := createIntegrationLogFile(t, ctx, store, "log-it-batch-rollback", serverModel.ID, "/var/log/batch.log")
+
+	entries := []*models.LogEntry{
+		{ID: "entry-it-rollback-1", LogFileID: logFile.ID, LineNumber: 1, Content: "first", Hash: "hash-1"},
+		{ID: "entry-it-rollback-2", LogFileID: logFile.ID, LineNumber: 1, Content: "duplicate", Hash: "hash-2"},
+	}
+	chunks := []*models.LogChunk{
+		newIntegrationChunk("chunk-it-rollback-1", logFile.ID, 1, 1, 1),
+	}
+
+	if err := store.CreateLogEntriesWithChunks(ctx, entries, chunks); !errors.Is(err, repository.ErrConflict) {
+		t.Fatalf("expected duplicate line conflict, got %v", err)
+	}
+
+	count, err := store.CountLogEntries(ctx, logFile.ID)
+	mustNoError(t, err)
+	if count != 0 {
+		t.Fatalf("expected failed batch to rollback entries, got %d entries", count)
+	}
+
+	chunkList, err := store.ListLogChunks(ctx, logFile.ID, 0, 0)
+	mustNoError(t, err)
+	if len(chunkList) != 0 {
+		t.Fatalf("expected failed batch to rollback chunks, got %#v", chunkList)
+	}
+}
+
+func createIntegrationServer(t *testing.T, ctx context.Context, store repository.Repository, id, name, host string) *models.Server {
+	t.Helper()
+
+	serverModel := &models.Server{
+		ID:        id,
+		Name:      name,
+		Host:      host,
+		Port:      22,
+		Username:  "demo",
+		AuthType:  models.AuthPassword,
+		AuthValue: "plain-secret",
+		Status:    models.ServerStatusActive,
+	}
+	mustNoError(t, store.CreateServer(ctx, serverModel))
+	return serverModel
+}
+
+func createIntegrationLogFile(t *testing.T, ctx context.Context, store repository.Repository, id, serverID, path string) *models.LogFile {
+	t.Helper()
+
+	logFile := &models.LogFile{
+		ID:       id,
+		ServerID: serverID,
+		Path:     path,
+		LogType:  models.LogTypeApp,
+		IsActive: true,
+	}
+	mustNoError(t, store.CreateLogFile(ctx, logFile))
+	return logFile
+}
+
+func newIntegrationChunk(id, logFileID string, chunkNumber, fromLine, toLine int64) *models.LogChunk {
+	return &models.LogChunk{
+		ID:             id,
+		LogFileID:      logFileID,
+		ChunkNumber:    chunkNumber,
+		FromLineNumber: fromLine,
+		ToLineNumber:   toLine,
+		FromByteOffset: fromLine * 10,
+		ToByteOffset:   toLine * 10,
+		EntriesCount:   int(toLine - fromLine + 1),
+		Hash:           "chunk-hash",
+		HashAlgorithm:  "hmac-sha256",
+	}
+}
+
 func newPostgresRepository(t *testing.T, ctx context.Context) repository.Repository {
 	t.Helper()
 
