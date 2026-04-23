@@ -92,3 +92,114 @@ func TestServerServiceDiscoverReportsBusyServer(t *testing.T) {
 		})
 	})
 }
+
+func TestServerServiceGetUpdateAndDeleteRuntimeManagedServer(t *testing.T) {
+	runner.Run(t, "server service supports runtime managed crud", func(t provider.T) {
+		t.Epic("Service layer")
+		t.Feature("Server application service")
+		t.Story("Runtime managed servers")
+		t.Title("Gets updates and deletes an API-managed server")
+
+		ctx := context.Background()
+		store := memory.New()
+		service := serverservice.NewService(store, discoveryservice.NewService(&testsupport.SSHClientFactory{}, store, nil))
+		serverModel := &models.Server{
+			ID:        "srv-runtime",
+			Name:      "runtime-host",
+			Host:      "10.0.0.10",
+			Port:      22,
+			Username:  "demo",
+			AuthType:  models.AuthPassword,
+			AuthValue: "secret",
+			OSType:    models.OSLinux,
+			ManagedBy: models.ServerManagedByAPI,
+		}
+
+		t.WithNewStep("Create server and fetch it back", func(step provider.StepCtx) {
+			step.Require().NoError(service.Create(ctx, serverModel))
+
+			storedServer, err := service.Get(ctx, serverModel.ID)
+			step.Require().NoError(err)
+			step.Require().Equal(serverModel.Name, storedServer.Name)
+			step.Require().Equal(serverModel.AuthValue, storedServer.AuthValue)
+		})
+
+		t.WithNewStep("Update server and keep existing auth value when payload omits it", func(step provider.StepCtx) {
+			updateModel := &models.Server{
+				ID:       serverModel.ID,
+				Name:     "runtime-host-updated",
+				Host:     "10.0.0.11",
+				Port:     2222,
+				Username: "admin",
+				AuthType: models.AuthPassword,
+				OSType:   models.OSLinux,
+				Status:   models.ServerStatusInactive,
+			}
+
+			step.Require().NoError(service.Update(ctx, updateModel))
+
+			storedServer, err := service.Get(ctx, serverModel.ID)
+			step.Require().NoError(err)
+			step.Require().Equal("runtime-host-updated", storedServer.Name)
+			step.Require().Equal("10.0.0.11", storedServer.Host)
+			step.Require().Equal(2222, storedServer.Port)
+			step.Require().Equal("admin", storedServer.Username)
+			step.Require().Equal(models.ServerStatusInactive, storedServer.Status)
+			step.Require().Equal("secret", storedServer.AuthValue)
+			step.Require().Equal(models.ServerManagedByAPI, storedServer.ManagedBy)
+		})
+
+		t.WithNewStep("Delete server and verify it is gone", func(step provider.StepCtx) {
+			step.Require().NoError(service.Delete(ctx, serverModel.ID))
+
+			_, err := service.Get(ctx, serverModel.ID)
+			step.Require().Error(err)
+		})
+	})
+}
+
+func TestServerServiceRejectsConfigManagedMutation(t *testing.T) {
+	runner.Run(t, "server service protects config managed servers from api mutation", func(t provider.T) {
+		t.Epic("Service layer")
+		t.Feature("Server application service")
+		t.Story("Config bootstrap ownership")
+		t.Title("Rejects update and delete for config-managed servers")
+
+		ctx := context.Background()
+		store := memory.New()
+		service := serverservice.NewService(store, discoveryservice.NewService(&testsupport.SSHClientFactory{}, store, nil))
+		serverModel := &models.Server{
+			ID:        "srv-config",
+			Name:      "config-host",
+			Host:      "10.0.0.20",
+			Port:      22,
+			Username:  "demo",
+			AuthType:  models.AuthPassword,
+			AuthValue: "secret",
+			OSType:    models.OSLinux,
+			ManagedBy: models.ServerManagedByConfig,
+		}
+		t.Require().NoError(store.CreateServer(ctx, serverModel))
+
+		t.WithNewStep("Reject update for config-managed server", func(step provider.StepCtx) {
+			err := service.Update(ctx, &models.Server{
+				ID:        serverModel.ID,
+				Name:      "config-host-updated",
+				Host:      "10.0.0.21",
+				Port:      22,
+				Username:  "admin",
+				AuthType:  models.AuthPassword,
+				AuthValue: "new-secret",
+				OSType:    models.OSLinux,
+			})
+			step.Require().Error(err)
+			step.Require().Contains(err.Error(), "managed by config")
+		})
+
+		t.WithNewStep("Reject delete for config-managed server", func(step provider.StepCtx) {
+			err := service.Delete(ctx, serverModel.ID)
+			step.Require().Error(err)
+			step.Require().Contains(err.Error(), "managed by config")
+		})
+	})
+}

@@ -56,6 +56,11 @@ func (s *Service) List(ctx context.Context) ([]*models.Server, error) {
 	return s.servers.ListServers(ctx)
 }
 
+// Get returns one registered server by identifier.
+func (s *Service) Get(ctx context.Context, serverID string) (*models.Server, error) {
+	return s.servers.GetServerByID(ctx, serverID)
+}
+
 // Create stores a new server model.
 func (s *Service) Create(ctx context.Context, serverModel *models.Server) error {
 	if serverModel.Status == "" {
@@ -71,6 +76,52 @@ func (s *Service) Create(ctx context.Context, serverModel *models.Server) error 
 		return err
 	}
 	return s.servers.CreateServer(ctx, serverModel)
+}
+
+// Update overwrites an API-managed server while preserving internal lifecycle fields.
+func (s *Service) Update(ctx context.Context, serverModel *models.Server) error {
+	current, err := s.servers.GetServerByID(ctx, serverModel.ID)
+	if err != nil {
+		return err
+	}
+	if err := ensureAPIServerMutable(current); err != nil {
+		return err
+	}
+
+	if serverModel.Port == 0 {
+		serverModel.Port = 22
+	}
+	if serverModel.AuthValue == "" {
+		serverModel.AuthValue = current.AuthValue
+	}
+	if serverModel.Status == "" {
+		serverModel.Status = current.Status
+	}
+
+	serverModel.ManagedBy = current.ManagedBy
+	serverModel.CreatedAt = current.CreatedAt
+	serverModel.SuccessCount = current.SuccessCount
+	serverModel.FailureCount = current.FailureCount
+	serverModel.LastError = current.LastError
+	serverModel.LastSeenAt = current.LastSeenAt
+	serverModel.BackoffUntil = current.BackoffUntil
+
+	if err := s.ensureUniqueIdentity(ctx, serverModel, current.ID); err != nil {
+		return err
+	}
+	return s.servers.UpdateServer(ctx, serverModel)
+}
+
+// Delete removes an API-managed server and all dependent monitored data.
+func (s *Service) Delete(ctx context.Context, serverID string) error {
+	serverModel, err := s.servers.GetServerByID(ctx, serverID)
+	if err != nil {
+		return err
+	}
+	if err := ensureAPIServerMutable(serverModel); err != nil {
+		return err
+	}
+	return s.servers.DeleteServer(ctx, serverID)
 }
 
 // Discover runs discovery for one server or for all servers.
@@ -137,6 +188,18 @@ func (s *Service) ensureUniqueIdentity(ctx context.Context, serverModel *models.
 		if strings.EqualFold(item.Host, serverModel.Host) {
 			return fmt.Errorf("%w: server host %q already exists", repository.ErrConflict, serverModel.Host)
 		}
+	}
+	return nil
+}
+
+// ensureAPIServerMutable blocks API updates for servers seeded from configuration.
+func ensureAPIServerMutable(serverModel *models.Server) error {
+	if serverModel.ManagedBy == "" || serverModel.ManagedBy == models.ServerManagedByConfig {
+		return fmt.Errorf(
+			"%w: server %q is managed by config and cannot be changed via api",
+			repository.ErrConflict,
+			serverModel.ID,
+		)
 	}
 	return nil
 }

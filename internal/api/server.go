@@ -41,7 +41,10 @@ func NewServer(addr string, logger *slog.Logger, authToken string, serverService
 	apiGroup := engine.Group("/api", middleware.APIKeyAuth(authToken))
 	{
 		apiGroup.GET("/servers", serverHandler.List)
+		apiGroup.GET("/servers/:id", serverHandler.Get)
 		apiGroup.POST("/servers", serverHandler.Create)
+		apiGroup.PUT("/servers/:id", serverHandler.Update)
+		apiGroup.DELETE("/servers/:id", serverHandler.Delete)
 		apiGroup.POST("/servers/discover", serverHandler.Discover)
 
 		apiGroup.GET("/logfiles", logFileHandler.List)
