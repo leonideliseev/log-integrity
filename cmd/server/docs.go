@@ -1,4 +1,4 @@
-//go:generate swag init -g main.go -o ../../docs --parseInternal --parseDependency --outputTypes go,json,yaml
+//go:generate swag init -g main.go -o ../../docs --parseInternal --parseDependency --outputTypes json,yaml
 package main
 
 // API documentation metadata for swag generation.

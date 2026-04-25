@@ -14,7 +14,6 @@ import (
 	integritycron "github.com/lenchik/logmonitor/crons/integrity"
 	"github.com/lenchik/logmonitor/crons/locks"
 	"github.com/lenchik/logmonitor/crons/scheduler"
-	"github.com/lenchik/logmonitor/internal/api"
 	jobqueue "github.com/lenchik/logmonitor/internal/jobs"
 	"github.com/lenchik/logmonitor/internal/repository"
 	"github.com/lenchik/logmonitor/internal/repository/memory"
@@ -30,6 +29,7 @@ import (
 	logfileappservice "github.com/lenchik/logmonitor/internal/service/logfile"
 	serverappservice "github.com/lenchik/logmonitor/internal/service/server"
 	sshclient "github.com/lenchik/logmonitor/internal/ssh"
+	httptransport "github.com/lenchik/logmonitor/internal/transport/http"
 	"github.com/lenchik/logmonitor/models"
 	"github.com/lenchik/logmonitor/pkg/logger"
 )
@@ -40,7 +40,7 @@ type App struct {
 	logger    *slog.Logger
 	repo      repository.Repository
 	jobs      *jobqueue.Manager
-	apiServer *api.Server
+	apiServer *httptransport.Server
 	scheduler *scheduler.Scheduler
 
 	discovery *discoveryservice.Service
@@ -117,7 +117,7 @@ func New(cfg *config.Config) (*App, error) {
 		locks:     lockManager,
 		runtime:   runtimeState,
 	}
-	apiServer := api.NewServer(address, log, cfg.API.AuthToken, serverService, logFileService, entryService, checkService, app.jobs, runtimeState, app.readiness)
+	apiServer := httptransport.NewServer(address, log, cfg.API.AuthToken, serverService, logFileService, entryService, checkService, app.jobs, runtimeState, app.readiness)
 
 	app.apiServer = apiServer
 

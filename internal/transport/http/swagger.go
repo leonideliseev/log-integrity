@@ -1,4 +1,4 @@
-package api
+package httptransport
 
 import (
 	"net/http"

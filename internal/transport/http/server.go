@@ -1,5 +1,5 @@
-// Package api exposes the HTTP server and route registration.
-package api
+// Package httptransport exposes the HTTP server and route registration.
+package httptransport
 
 import (
 	"context"
@@ -9,14 +9,14 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/lenchik/logmonitor/internal/api/handlers"
-	"github.com/lenchik/logmonitor/internal/api/middleware"
 	jobqueue "github.com/lenchik/logmonitor/internal/jobs"
 	"github.com/lenchik/logmonitor/internal/runtimeinfo"
 	checkservice "github.com/lenchik/logmonitor/internal/service/check"
 	entryservice "github.com/lenchik/logmonitor/internal/service/entry"
 	logfileservice "github.com/lenchik/logmonitor/internal/service/logfile"
 	serverservice "github.com/lenchik/logmonitor/internal/service/server"
+	"github.com/lenchik/logmonitor/internal/transport/http/handlers"
+	"github.com/lenchik/logmonitor/internal/transport/http/middleware"
 )
 
 // ReadinessFunc computes the current readiness status for the process.
