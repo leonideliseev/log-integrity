@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"os"
 
 	"github.com/gin-gonic/gin"
 )
@@ -39,6 +40,10 @@ func registerSwagger(engine *gin.Engine) {
 		c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(swaggerUIHTML))
 	})
 	engine.GET("/swagger/openapi.json", func(c *gin.Context) {
+		if data, err := os.ReadFile("docs/swagger.json"); err == nil {
+			c.Data(http.StatusOK, "application/json; charset=utf-8", data)
+			return
+		}
 		c.JSON(http.StatusOK, openAPISpec())
 	})
 }

@@ -23,6 +23,18 @@ func NewCheckHandler(service *checkservice.Service, jobs *jobqueue.Manager) *Che
 	return &CheckHandler{service: service, jobs: jobs}
 }
 
+// List godoc
+// @Summary List integrity checks for one log file
+// @Tags checks
+// @Produce json
+// @Security ApiKeyAuth
+// @Param log_file_id query string true "Log file identifier"
+// @Param offset query int false "Pagination offset"
+// @Param limit query int false "Pagination limit"
+// @Success 200 {array} checkResultResponse
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/checks [get]
 // List returns stored integrity check results for a log file.
 func (h *CheckHandler) List(c *gin.Context) {
 	logFileID := c.Query("log_file_id")
@@ -54,14 +66,20 @@ func (h *CheckHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, checkResultResponses(items))
 }
 
+// Run godoc
+// @Summary Queue integrity checks for one server or for all server log files
+// @Tags checks, jobs
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param payload body checkRunRequest true "Integrity payload"
+// @Success 202 {object} jobResponse
+// @Failure 400 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/checks/run [post]
 // Run launches integrity checks for one log file or for all server log files.
 func (h *CheckHandler) Run(c *gin.Context) {
-	type request struct {
-		ServerID  string `json:"server_id"`
-		LogFileID string `json:"log_file_id"`
-	}
-
-	var payload request
+	var payload checkRunRequest
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		writeError(c, http.StatusBadRequest, err.Error())
 		return

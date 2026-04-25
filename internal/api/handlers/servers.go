@@ -86,6 +86,13 @@ func NewServerHandler(service *serverservice.Service, jobs *jobqueue.Manager) *S
 	return &ServerHandler{service: service, jobs: jobs}
 }
 
+// List godoc
+// @Summary List monitored servers
+// @Tags servers
+// @Produce json
+// @Security ApiKeyAuth
+// @Success 200 {array} serverResponse
+// @Router /api/servers [get]
 // List returns all registered servers.
 func (h *ServerHandler) List(c *gin.Context) {
 	items, err := h.service.List(c.Request.Context())
@@ -96,6 +103,13 @@ func (h *ServerHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, serverResponses(items))
 }
 
+// Dashboard godoc
+// @Summary Get dashboard summary
+// @Tags dashboard
+// @Produce json
+// @Security ApiKeyAuth
+// @Success 200 {object} dashboardResponse
+// @Router /api/dashboard [get]
 // Dashboard returns aggregated counters for future UI screens.
 func (h *ServerHandler) Dashboard(c *gin.Context) {
 	dashboard, err := h.service.Dashboard(c.Request.Context())
@@ -106,6 +120,13 @@ func (h *ServerHandler) Dashboard(c *gin.Context) {
 	c.JSON(http.StatusOK, newDashboardResponse(dashboard))
 }
 
+// ListProblems godoc
+// @Summary List aggregated problems
+// @Tags problems
+// @Produce json
+// @Security ApiKeyAuth
+// @Success 200 {array} systemProblemResponse
+// @Router /api/problems [get]
 // ListProblems returns aggregated operational issues across servers and log files.
 func (h *ServerHandler) ListProblems(c *gin.Context) {
 	items, err := h.service.ListProblems(c.Request.Context())
@@ -116,6 +137,16 @@ func (h *ServerHandler) ListProblems(c *gin.Context) {
 	c.JSON(http.StatusOK, systemProblemResponses(items))
 }
 
+// Get godoc
+// @Summary Get monitored server by ID
+// @Tags servers
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path string true "Server identifier"
+// @Success 200 {object} serverResponse
+// @Failure 400 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Router /api/servers/{id} [get]
 // Get returns one registered server by identifier.
 func (h *ServerHandler) Get(c *gin.Context) {
 	serverID, ok := serverIDFromPath(c)
@@ -131,6 +162,17 @@ func (h *ServerHandler) Get(c *gin.Context) {
 	c.JSON(http.StatusOK, newServerResponse(serverModel))
 }
 
+// Create godoc
+// @Summary Create monitored server
+// @Tags servers
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param payload body createServerRequest true "Server payload"
+// @Success 201 {object} serverResponse
+// @Failure 400 {object} map[string]string
+// @Failure 409 {object} map[string]string
+// @Router /api/servers [post]
 // Create registers a new server from JSON payload.
 func (h *ServerHandler) Create(c *gin.Context) {
 	var payload createServerRequest
@@ -151,6 +193,16 @@ func (h *ServerHandler) Create(c *gin.Context) {
 	c.JSON(http.StatusCreated, newServerResponse(serverModel))
 }
 
+// Retry godoc
+// @Summary Clear temporary failure state for a server
+// @Tags servers
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path string true "Server identifier"
+// @Success 200 {object} serverResponse
+// @Failure 400 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Router /api/servers/{id}/retry [post]
 // Retry clears temporary failure state so operators can retry a server immediately.
 func (h *ServerHandler) Retry(c *gin.Context) {
 	serverID, ok := serverIDFromPath(c)
@@ -166,6 +218,19 @@ func (h *ServerHandler) Retry(c *gin.Context) {
 	c.JSON(http.StatusOK, newServerResponse(serverModel))
 }
 
+// Update godoc
+// @Summary Update monitored server
+// @Tags servers
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path string true "Server identifier"
+// @Param payload body updateServerRequest true "Server payload"
+// @Success 200 {object} serverResponse
+// @Failure 400 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Failure 409 {object} map[string]string
+// @Router /api/servers/{id} [put]
 // Update overwrites one API-managed server from JSON payload.
 func (h *ServerHandler) Update(c *gin.Context) {
 	serverID, ok := serverIDFromPath(c)
@@ -197,6 +262,16 @@ func (h *ServerHandler) Update(c *gin.Context) {
 	c.JSON(http.StatusOK, newServerResponse(updatedServer))
 }
 
+// Delete godoc
+// @Summary Delete monitored server
+// @Tags servers
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path string true "Server identifier"
+// @Success 204 "Server deleted"
+// @Failure 400 {object} map[string]string
+// @Failure 409 {object} map[string]string
+// @Router /api/servers/{id} [delete]
 // Delete removes one API-managed server and all related monitoring data.
 func (h *ServerHandler) Delete(c *gin.Context) {
 	serverID, ok := serverIDFromPath(c)
@@ -215,13 +290,20 @@ func (h *ServerHandler) Delete(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
+// Discover godoc
+// @Summary Queue log discovery for one server or for all servers
+// @Tags jobs, servers
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param payload body discoverRequest false "Optional server selector"
+// @Success 202 {object} jobResponse
+// @Failure 400 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/servers/discover [post]
 // Discover runs log discovery for one server or for all servers.
 func (h *ServerHandler) Discover(c *gin.Context) {
-	type request struct {
-		ServerID string `json:"server_id"`
-	}
-
-	var payload request
+	var payload discoverRequest
 	if c.Request.ContentLength > 0 {
 		if err := c.ShouldBindJSON(&payload); err != nil {
 			writeError(c, http.StatusBadRequest, err.Error())

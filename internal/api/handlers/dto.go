@@ -10,6 +10,23 @@ import (
 	"github.com/lenchik/logmonitor/models"
 )
 
+// discoverRequest describes the payload for an async discovery submission.
+type discoverRequest struct {
+	ServerID string `json:"server_id"`
+}
+
+// collectRequest describes the payload for an async collection submission.
+type collectRequest struct {
+	ServerID  string `json:"server_id"`
+	LogFileID string `json:"log_file_id"`
+}
+
+// checkRunRequest describes the payload for an async integrity submission.
+type checkRunRequest struct {
+	ServerID  string `json:"server_id"`
+	LogFileID string `json:"log_file_id"`
+}
+
 type logFileResponse struct {
 	ID             string              `json:"id"`
 	ServerID       string              `json:"server_id"`

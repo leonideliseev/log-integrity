@@ -19,6 +19,21 @@ func NewJobHandler(jobs *jobqueue.Manager) *JobHandler {
 	return &JobHandler{jobs: jobs}
 }
 
+// List godoc
+// @Summary List async jobs
+// @Tags jobs
+// @Produce json
+// @Security ApiKeyAuth
+// @Param type query string false "Optional job type filter"
+// @Param status query string false "Optional job status filter"
+// @Param server_id query string false "Optional server identifier"
+// @Param log_file_id query string false "Optional log file identifier"
+// @Param offset query int false "Pagination offset"
+// @Param limit query int false "Pagination limit"
+// @Success 200 {array} jobResponse
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/jobs [get]
 // List returns queued, running and completed jobs with lightweight filtering.
 func (h *JobHandler) List(c *gin.Context) {
 	offset, err := parseIntQuery(c, "offset", 0)
@@ -50,6 +65,16 @@ func (h *JobHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, jobResponses(items))
 }
 
+// Get godoc
+// @Summary Get async job by ID
+// @Tags jobs
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path string true "Job identifier"
+// @Success 200 {object} jobResponse
+// @Failure 400 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Router /api/jobs/{id} [get]
 // Get returns one queued or historical job by identifier.
 func (h *JobHandler) Get(c *gin.Context) {
 	jobID := strings.TrimSpace(c.Param("id"))

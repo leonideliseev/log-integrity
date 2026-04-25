@@ -17,6 +17,13 @@ func NewRuntimeHandler(state *runtimeinfo.State) *RuntimeHandler {
 	return &RuntimeHandler{state: state}
 }
 
+// Validation godoc
+// @Summary Get runtime validation snapshot
+// @Tags runtime
+// @Produce json
+// @Security ApiKeyAuth
+// @Success 200 {object} runtimeinfo.Snapshot
+// @Router /api/runtime/validation [get]
 // Validation returns runtime startup warnings and environment resolution results.
 func (h *RuntimeHandler) Validation(c *gin.Context) {
 	c.JSON(http.StatusOK, h.state.Snapshot())

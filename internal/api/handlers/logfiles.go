@@ -22,6 +22,16 @@ func NewLogFileHandler(service *logfileservice.Service, jobs *jobqueue.Manager) 
 	return &LogFileHandler{service: service, jobs: jobs}
 }
 
+// List godoc
+// @Summary List active log files or log files of one server
+// @Tags logfiles
+// @Produce json
+// @Security ApiKeyAuth
+// @Param server_id query string false "Optional server identifier"
+// @Success 200 {array} logFileResponse
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/logfiles [get]
 // List returns active log files or log files of a concrete server.
 func (h *LogFileHandler) List(c *gin.Context) {
 	serverID := c.Query("server_id")
@@ -33,14 +43,20 @@ func (h *LogFileHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, logFileResponses(items))
 }
 
+// Collect godoc
+// @Summary Queue remote log collection
+// @Tags jobs, logfiles
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param payload body collectRequest true "Collection payload"
+// @Success 202 {object} jobResponse
+// @Failure 400 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/logfiles/collect [post]
 // Collect reads remote log files and persists newly discovered entries.
 func (h *LogFileHandler) Collect(c *gin.Context) {
-	type request struct {
-		ServerID  string `json:"server_id"`
-		LogFileID string `json:"log_file_id"`
-	}
-
-	var payload request
+	var payload collectRequest
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		writeError(c, http.StatusBadRequest, err.Error())
 		return

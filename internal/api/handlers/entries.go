@@ -17,6 +17,18 @@ func NewEntryHandler(service *entryservice.Service) *EntryHandler {
 	return &EntryHandler{service: service}
 }
 
+// List godoc
+// @Summary List stored log entries
+// @Tags entries
+// @Produce json
+// @Security ApiKeyAuth
+// @Param log_file_id query string true "Log file identifier"
+// @Param offset query int false "Pagination offset"
+// @Param limit query int false "Pagination limit"
+// @Success 200 {array} logEntryResponse
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/entries [get]
 // List returns stored log entries for one log file with pagination.
 func (h *EntryHandler) List(c *gin.Context) {
 	logFileID := c.Query("log_file_id")
