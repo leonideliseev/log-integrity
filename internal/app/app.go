@@ -4,7 +4,6 @@ package app
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"strings"
 	"time"
 
@@ -14,117 +13,52 @@ import (
 	integritycron "github.com/lenchik/logmonitor/crons/integrity"
 	"github.com/lenchik/logmonitor/crons/locks"
 	"github.com/lenchik/logmonitor/crons/scheduler"
-	jobqueue "github.com/lenchik/logmonitor/internal/jobs"
 	"github.com/lenchik/logmonitor/internal/repository"
 	"github.com/lenchik/logmonitor/internal/repository/memory"
 	"github.com/lenchik/logmonitor/internal/repository/postgres"
-	"github.com/lenchik/logmonitor/internal/runtimeinfo"
 	"github.com/lenchik/logmonitor/internal/security"
-	checkappservice "github.com/lenchik/logmonitor/internal/service/check"
-	collectservice "github.com/lenchik/logmonitor/internal/service/collector"
-	discoveryservice "github.com/lenchik/logmonitor/internal/service/discovery"
-	entryappservice "github.com/lenchik/logmonitor/internal/service/entry"
-	healthservice "github.com/lenchik/logmonitor/internal/service/health"
-	integrityservice "github.com/lenchik/logmonitor/internal/service/integrity"
-	logfileappservice "github.com/lenchik/logmonitor/internal/service/logfile"
-	serverappservice "github.com/lenchik/logmonitor/internal/service/server"
-	sshclient "github.com/lenchik/logmonitor/internal/ssh"
 	httptransport "github.com/lenchik/logmonitor/internal/transport/http"
 	"github.com/lenchik/logmonitor/models"
-	"github.com/lenchik/logmonitor/pkg/logger"
 )
 
 // App owns the runtime dependencies and controls application startup/shutdown.
 type App struct {
 	cfg       *config.Config
-	logger    *slog.Logger
-	repo      repository.Repository
-	jobs      *jobqueue.Manager
+	runtime   *Runtime
 	apiServer *httptransport.Server
 	scheduler *scheduler.Scheduler
-
-	discovery *discoveryservice.Service
-	collector *collectservice.Service
-	integrity *integrityservice.Service
-	health    *healthservice.Service
-	locks     *locks.Manager
-	runtime   *runtimeinfo.State
 }
 
 // New wires repositories, services, API server and cron jobs into one application.
 func New(cfg *config.Config) (*App, error) {
-	log := logger.New("info")
-	runtimeState := runtimeinfo.NewState()
-	runtimeState.SetDryRun(cfg.Runtime.DryRun)
-	runtimeState.SetEnvChecks(cfg.EnvChecks)
-
-	store, backend, err := buildRepository(cfg)
+	runtime, err := NewRuntime(cfg)
 	if err != nil {
 		return nil, err
 	}
-	runtimeState.SetStorageBackend(backend)
-	if cfg.Runtime.DryRun {
-		runtimeState.AddWarning("dry-run-enabled", "dry-run mode is enabled: background jobs are disabled and the in-memory repository is used")
-	}
-	if cfg.Runtime.DryRun && databaseConfigured(cfg) {
-		runtimeState.AddWarning("dry-run-database-skipped", "database configuration was ignored because dry-run mode is enabled")
-	}
-
-	sshFactory, err := sshclient.NewClientFactoryWithOptions(sshclient.Options{
-		ConnectTimeout:        time.Duration(cfg.SSH.ConnectTimeoutSeconds) * time.Second,
-		CommandTimeout:        time.Duration(cfg.SSH.CommandTimeoutSeconds) * time.Second,
-		KnownHostsPath:        cfg.SSH.KnownHostsPath,
-		InsecureIgnoreHostKey: *cfg.SSH.InsecureIgnoreHostKey,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("app: create ssh client factory: %w", err)
-	}
-
-	discoveryService := discoveryservice.NewServiceWithServerRepository(sshFactory, store, store, nil)
-	collectorService := collectservice.NewServiceWithOptions(sshFactory, store, store, store, collectservice.Options{
-		BatchSize:        cfg.Collector.BatchSize,
-		ChunkSize:        cfg.Collector.ChunkSize,
-		StoreRawContent:  *cfg.Collector.StoreRawContent,
-		ChunkHashAlgo:    cfg.Collector.ChunkHashAlgo,
-		IntegrityHMACKey: cfg.Security.IntegrityHMACKey,
-	})
-	integrityService := integrityservice.NewServiceWithOptions(sshFactory, store, store, store, integrityservice.Options{
-		IntegrityHMACKey: cfg.Security.IntegrityHMACKey,
-	})
-	healthService := healthservice.NewService(store, healthservice.Options{
-		FailureThreshold:   cfg.Health.FailureThreshold,
-		BackoffBase:        time.Duration(cfg.Health.BackoffBaseSeconds) * time.Second,
-		BackoffMax:         time.Duration(cfg.Health.BackoffMaxSeconds) * time.Second,
-		LastErrorMaxLength: cfg.Health.LastErrorMaxLength,
-	})
-	lockManager := buildLockManager(cfg)
-	serverService := serverappservice.NewServiceWithHealthAndLocker(store, discoveryService, healthService, lockManager)
-	logFileService := logfileappservice.NewServiceWithHealthAndLocker(store, store, collectorService, healthService, lockManager)
-	entryService := entryappservice.NewService(store)
-	checkService := checkappservice.NewServiceWithHealthAndLocker(store, store, store, integrityService, healthService, lockManager)
 
 	address := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	app := &App{
 		cfg:       cfg,
-		logger:    log,
-		repo:      store,
-		jobs:      jobqueue.NewManager(log, jobqueue.Options{Workers: cfg.Jobs.Workers, QueueSize: cfg.Jobs.QueueSize, HistoryLimit: cfg.Jobs.HistoryLimit}),
+		runtime:   runtime,
 		scheduler: scheduler.New(),
-		discovery: discoveryService,
-		collector: collectorService,
-		integrity: integrityService,
-		health:    healthService,
-		locks:     lockManager,
-		runtime:   runtimeState,
 	}
-	apiServer := httptransport.NewServer(address, log, cfg.API.AuthToken, serverService, logFileService, entryService, checkService, app.jobs, runtimeState, app.readiness)
+	apiServer := httptransport.NewServer(
+		address,
+		runtime.Logger,
+		cfg.API.AuthToken,
+		runtime.ServerService,
+		runtime.LogFileService,
+		runtime.EntryService,
+		runtime.CheckService,
+		runtime.Jobs,
+		runtime.RuntimeState,
+		runtime.readiness,
+	)
 
 	app.apiServer = apiServer
 
-	if err := app.seedServers(context.Background()); err != nil {
-		return nil, err
-	}
 	if err := app.registerJobs(); err != nil {
+		_ = runtime.Close()
 		return nil, err
 	}
 	app.runtime.SetSchedulerEnabled(!cfg.Runtime.DryRun)
@@ -169,11 +103,11 @@ func buildRepository(cfg *config.Config) (repository.Repository, string, error) 
 
 // Run starts background jobs and the API server until the context is canceled.
 func (a *App) Run(ctx context.Context) (err error) {
-	a.jobs.Start(ctx)
+	a.runtime.Jobs.Start(ctx)
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		if shutdownErr := a.jobs.Shutdown(shutdownCtx); err == nil && shutdownErr != nil {
+		if shutdownErr := a.runtime.Jobs.Shutdown(shutdownCtx); err == nil && shutdownErr != nil {
 			err = fmt.Errorf("app: shutdown jobs: %w", shutdownErr)
 		}
 	}()
@@ -183,65 +117,12 @@ func (a *App) Run(ctx context.Context) (err error) {
 		defer a.scheduler.Stop()
 	}
 	defer func() {
-		if closeErr := a.repo.Close(); err == nil && closeErr != nil {
+		if closeErr := a.runtime.Close(); err == nil && closeErr != nil {
 			err = fmt.Errorf("app: close repository: %w", closeErr)
 		}
 	}()
 
 	return a.apiServer.Run(ctx)
-}
-
-// seedServers imports server definitions from config into the repository.
-func (a *App) seedServers(ctx context.Context) error {
-	existing, err := a.repo.ListServers(ctx)
-	if err != nil {
-		return fmt.Errorf("app: list existing servers: %w", err)
-	}
-
-	for _, item := range a.cfg.Servers {
-		if current := findServerByNameOrHost(existing, item.Name, item.Host); current != nil {
-			if !isConfigManagedServer(current) {
-				return fmt.Errorf(
-					"%w: app: config server %q (%s) conflicts with API-managed server %q",
-					repository.ErrConflict,
-					item.Name,
-					item.Host,
-					current.ID,
-				)
-			}
-
-			serverModel := serverModelFromConfig(item)
-			serverModel.ID = current.ID
-			serverModel.CreatedAt = current.CreatedAt
-			serverModel.Status = current.Status
-			serverModel.SuccessCount = current.SuccessCount
-			serverModel.FailureCount = current.FailureCount
-			serverModel.LastError = current.LastError
-			serverModel.LastSeenAt = current.LastSeenAt
-			serverModel.BackoffUntil = current.BackoffUntil
-			if serverModel.Status == "" {
-				serverModel.Status = models.ServerStatusActive
-			}
-			if err := a.repo.UpdateServer(ctx, serverModel); err != nil {
-				a.runtime.AddWarning("seed-server-skipped", fmt.Sprintf("server %q was skipped during bootstrap: %v", item.Name, err))
-				a.logger.Warn("skip server bootstrap update", "server", item.Name, "error", err)
-				continue
-			}
-			existing = replaceServer(existing, serverModel)
-			continue
-		}
-
-		serverModel := serverModelFromConfig(item)
-
-		if err := a.repo.CreateServer(ctx, serverModel); err != nil {
-			a.runtime.AddWarning("seed-server-skipped", fmt.Sprintf("server %q was skipped during bootstrap: %v", item.Name, err))
-			a.logger.Warn("skip server bootstrap create", "server", item.Name, "error", err)
-			continue
-		}
-		existing = append(existing, serverModel)
-	}
-
-	return nil
 }
 
 // registerJobs registers all configured cron jobs in the scheduler.
@@ -262,20 +143,20 @@ func (a *App) registerJobs() error {
 		return err
 	}
 
-	discoveryRunner := discoverycron.NewRunnerWithHealthAndOptions(a.logger, a.repo, a.discovery, a.health, a.locks, discoverycron.Options{
+	discoveryRunner := discoverycron.NewRunnerWithHealthAndOptions(a.runtime.Logger, a.runtime.Repo, a.runtime.discovery, a.runtime.health, a.runtime.locks, discoverycron.Options{
 		MaxServerWorkers: a.cfg.Workers.DiscoveryServers,
 	})
 	if err := a.scheduler.AddFunc("discovery", discoveryInterval, discoveryRunner.Run); err != nil {
 		return err
 	}
-	collectionRunner := collectioncron.NewRunnerWithHealthAndOptions(a.logger, a.repo, a.repo, a.collector, a.health, a.locks, collectioncron.Options{
+	collectionRunner := collectioncron.NewRunnerWithHealthAndOptions(a.runtime.Logger, a.runtime.Repo, a.runtime.Repo, a.runtime.collector, a.runtime.health, a.runtime.locks, collectioncron.Options{
 		MaxServerWorkers:         a.cfg.Workers.CollectionServers,
 		MaxLogFileWorkersPerHost: a.cfg.Workers.CollectionLogFilesPerHost,
 	})
 	if err := a.scheduler.AddFunc("collection", collectionInterval, collectionRunner.Run); err != nil {
 		return err
 	}
-	integrityRunner := integritycron.NewRunnerWithHealthAndOptions(a.logger, a.repo, a.repo, a.integrity, a.health, a.locks, integritycron.Options{
+	integrityRunner := integritycron.NewRunnerWithHealthAndOptions(a.runtime.Logger, a.runtime.Repo, a.runtime.Repo, a.runtime.integrity, a.runtime.health, a.runtime.locks, integritycron.Options{
 		MaxServerWorkers:         a.cfg.Workers.IntegrityServers,
 		MaxLogFileWorkersPerHost: a.cfg.Workers.IntegrityLogFilesPerHost,
 	})
@@ -334,61 +215,4 @@ func findServerByNameOrHost(servers []*models.Server, name, host string) *models
 // databaseConfigured reports whether PostgreSQL settings are present enough to attempt a real connection.
 func databaseConfigured(cfg *config.Config) bool {
 	return cfg.Database.Host != "" && cfg.Database.User != "" && cfg.Database.DBName != ""
-}
-
-// readiness reports whether the process is ready to serve traffic and background tasks.
-func (a *App) readiness(ctx context.Context) runtimeinfo.Readiness {
-	checks := make([]runtimeinfo.Check, 0, 3)
-
-	if err := a.repo.Ping(ctx); err != nil {
-		checks = append(checks, runtimeinfo.Check{
-			Name:    "repository",
-			Ready:   false,
-			Message: err.Error(),
-		})
-	} else {
-		checks = append(checks, runtimeinfo.Check{
-			Name:    "repository",
-			Ready:   true,
-			Message: "repository is reachable",
-		})
-	}
-
-	checks = append(checks, runtimeinfo.Check{
-		Name:    "api",
-		Ready:   true,
-		Message: "http api is initialized",
-	})
-	checks = append(checks, runtimeinfo.Check{
-		Name:    "jobs",
-		Ready:   true,
-		Message: "async job queue is configured",
-	})
-
-	if a.cfg.Runtime.DryRun {
-		checks = append(checks, runtimeinfo.Check{
-			Name:    "scheduler",
-			Ready:   true,
-			Message: "scheduler is intentionally disabled in dry-run mode",
-		})
-	} else {
-		checks = append(checks, runtimeinfo.Check{
-			Name:    "scheduler",
-			Ready:   true,
-			Message: "scheduler is configured",
-		})
-	}
-
-	ready := true
-	for _, check := range checks {
-		if !check.Ready {
-			ready = false
-			break
-		}
-	}
-
-	return runtimeinfo.Readiness{
-		Ready:  ready,
-		Checks: checks,
-	}
 }
