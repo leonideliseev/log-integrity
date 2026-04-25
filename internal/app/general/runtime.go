@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/lenchik/logmonitor/config"
 	"github.com/lenchik/logmonitor/crons/locks"
 	"github.com/lenchik/logmonitor/internal/repository"
@@ -50,21 +51,11 @@ type Runtime struct {
 // NewRuntime builds repositories, services and shared runtime state without starting transports.
 func NewRuntime(cfg *config.Config) (*Runtime, error) {
 	log := logger.New("info")
-	runtimeState := runtimeinfo.NewState()
-	runtimeState.SetDryRun(cfg.Runtime.DryRun)
-	runtimeState.SetEnvChecks(cfg.EnvChecks)
-	runtimeState.SetSchedulerEnabled(false)
+	runtimeState := buildRuntimeState(cfg)
 
-	store, backend, err := buildRepository(cfg)
+	store, _, err := buildRepository(cfg)
 	if err != nil {
 		return nil, err
-	}
-	runtimeState.SetStorageBackend(backend)
-	if cfg.Runtime.DryRun {
-		runtimeState.AddWarning("dry-run-enabled", "dry-run mode is enabled: background jobs are disabled and the in-memory repository is used")
-	}
-	if cfg.Runtime.DryRun && databaseConfigured(cfg) {
-		runtimeState.AddWarning("dry-run-database-skipped", "database configuration was ignored because dry-run mode is enabled")
 	}
 
 	sshFactory, err := sshclient.NewClientFactoryWithOptions(sshclient.Options{
@@ -121,6 +112,11 @@ func NewRuntime(cfg *config.Config) (*Runtime, error) {
 	return runtime, nil
 }
 
+// BuildRuntimeSnapshot creates a non-mutating runtime status snapshot from config only.
+func BuildRuntimeSnapshot(cfg *config.Config) runtimeinfo.Snapshot {
+	return buildRuntimeState(cfg).Snapshot()
+}
+
 // Close releases runtime resources such as the repository connection.
 func (r *Runtime) Close() error {
 	if r == nil || r.Repo == nil {
@@ -159,6 +155,44 @@ func (r *Runtime) Readiness(ctx context.Context) runtimeinfo.Readiness {
 		Name:    "services",
 		Ready:   true,
 		Message: "core services are initialized",
+	})
+
+	ready := true
+	for _, check := range checks {
+		if !check.Ready {
+			ready = false
+			break
+		}
+	}
+
+	return runtimeinfo.Readiness{
+		Ready:  ready,
+		Checks: checks,
+	}
+}
+
+// ProbeReadiness performs lightweight readiness checks without migrations or config bootstrap.
+func ProbeReadiness(ctx context.Context, cfg *config.Config) runtimeinfo.Readiness {
+	checks := make([]runtimeinfo.Check, 0, 2)
+
+	if err := pingRepository(ctx, cfg); err != nil {
+		checks = append(checks, runtimeinfo.Check{
+			Name:    "repository",
+			Ready:   false,
+			Message: err.Error(),
+		})
+	} else {
+		checks = append(checks, runtimeinfo.Check{
+			Name:    "repository",
+			Ready:   true,
+			Message: "repository is reachable",
+		})
+	}
+
+	checks = append(checks, runtimeinfo.Check{
+		Name:    "config",
+		Ready:   true,
+		Message: "runtime configuration is valid",
 	})
 
 	ready := true
@@ -285,6 +319,75 @@ func buildRepository(cfg *config.Config) (repository.Repository, string, error) 
 	}
 
 	return store, "postgres", nil
+}
+
+// buildRuntimeState prepares operator-facing runtime metadata without touching persistent state.
+func buildRuntimeState(cfg *config.Config) *runtimeinfo.State {
+	runtimeState := runtimeinfo.NewState()
+	runtimeState.SetDryRun(cfg.Runtime.DryRun)
+	runtimeState.SetEnvChecks(cfg.EnvChecks)
+	runtimeState.SetSchedulerEnabled(false)
+	runtimeState.SetStorageBackend(repositoryBackendName(cfg))
+	if cfg.Runtime.DryRun {
+		runtimeState.AddWarning("dry-run-enabled", "dry-run mode is enabled: background jobs are disabled and the in-memory repository is used")
+	}
+	if cfg.Runtime.DryRun && databaseConfigured(cfg) {
+		runtimeState.AddWarning("dry-run-database-skipped", "database configuration was ignored because dry-run mode is enabled")
+	}
+	return runtimeState
+}
+
+// repositoryBackendName reports which storage backend would be used for the provided config.
+func repositoryBackendName(cfg *config.Config) string {
+	if cfg.Runtime.DryRun {
+		return "memory"
+	}
+	if databaseConfigured(cfg) {
+		return "postgres"
+	}
+	return "memory"
+}
+
+// pingRepository checks storage availability without running migrations or bootstrap logic.
+func pingRepository(ctx context.Context, cfg *config.Config) error {
+	if cfg.Runtime.DryRun || !databaseConfigured(cfg) {
+		return nil
+	}
+
+	poolConfig, err := pgxpool.ParseConfig(cfg.Database.DSN())
+	if err != nil {
+		return fmt.Errorf("app: parse repository probe config: %w", err)
+	}
+	poolConfig.MinConns = cfg.Database.MinConns
+	poolConfig.MaxConns = cfg.Database.MaxConns
+	if poolConfig.MinConns <= 0 {
+		poolConfig.MinConns = 1
+	}
+	if poolConfig.MaxConns <= 0 {
+		poolConfig.MaxConns = 10
+	}
+	if poolConfig.MinConns > poolConfig.MaxConns {
+		poolConfig.MinConns = poolConfig.MaxConns
+	}
+
+	pingCtx := ctx
+	if pingCtx == nil {
+		pingCtx = context.Background()
+	}
+	var cancel context.CancelFunc
+	pingCtx, cancel = context.WithTimeout(pingCtx, 5*time.Second)
+	defer cancel()
+
+	pool, err := pgxpool.NewWithConfig(pingCtx, poolConfig)
+	if err != nil {
+		return fmt.Errorf("app: create repository probe pool: %w", err)
+	}
+	defer pool.Close()
+
+	if err := pool.Ping(pingCtx); err != nil {
+		return fmt.Errorf("app: ping repository: %w", err)
+	}
+	return nil
 }
 
 // serverModelFromConfig converts a configured server into a repository model.

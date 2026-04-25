@@ -7,6 +7,7 @@ import (
 
 	cliapp "github.com/lenchik/logmonitor/internal/app/cli"
 	generalapp "github.com/lenchik/logmonitor/internal/app/general"
+	"github.com/lenchik/logmonitor/internal/runtimeinfo"
 	"github.com/spf13/cobra"
 )
 
@@ -79,6 +80,48 @@ func (a *Application) withRuntime(cmd *cobra.Command, run func(context.Context, 
 	}
 
 	return run(ctx, runtime)
+}
+
+// withSnapshot loads config and builds a non-mutating runtime snapshot for diagnostic commands.
+func (a *Application) withSnapshot(cmd *cobra.Command, run func(context.Context, runtimeinfo.Snapshot) error) error {
+	if err := a.validateOutput(); err != nil {
+		return err
+	}
+	a.stdout = cmd.OutOrStdout()
+	a.stderr = cmd.ErrOrStderr()
+
+	snapshot, err := cliapp.LoadSnapshotFromPath(a.configPath)
+	if err != nil {
+		return fmt.Errorf("cli: initialize runtime snapshot: %w", err)
+	}
+
+	ctx := cmd.Context()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	return run(ctx, snapshot)
+}
+
+// withReadiness loads config and performs lightweight readiness checks for diagnostic commands.
+func (a *Application) withReadiness(cmd *cobra.Command, run func(context.Context, runtimeinfo.Readiness) error) error {
+	if err := a.validateOutput(); err != nil {
+		return err
+	}
+	a.stdout = cmd.OutOrStdout()
+	a.stderr = cmd.ErrOrStderr()
+
+	ctx := cmd.Context()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	readiness, err := cliapp.ProbeReadinessFromPath(ctx, a.configPath)
+	if err != nil {
+		return fmt.Errorf("cli: initialize readiness probe: %w", err)
+	}
+
+	return run(ctx, readiness)
 }
 
 // validateOutput ensures the selected printer mode is supported by the CLI.

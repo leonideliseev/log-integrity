@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	generalapp "github.com/lenchik/logmonitor/internal/app/general"
+	"github.com/lenchik/logmonitor/internal/runtimeinfo"
 	"github.com/spf13/cobra"
 )
 
@@ -13,10 +13,10 @@ func (a *Application) newHealthCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:     "health",
 		Short:   "Run a local liveness check",
-		Long:    "Builds the standalone CLI runtime and returns a success response when the process can initialize correctly.",
+		Long:    "Loads the selected config in CLI mode and returns a success response when lightweight initialization succeeds.",
 		Example: "logmonitor health\nlogmonitor health --output json",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return a.withRuntime(cmd, func(_ context.Context, _ *generalapp.Runtime) error {
+			return a.withSnapshot(cmd, func(_ context.Context, _ runtimeinfo.Snapshot) error {
 				if a.output == outputJSON {
 					return printJSON(a.out(), map[string]string{"status": "ok"})
 				}
@@ -32,11 +32,10 @@ func (a *Application) newReadyCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:     "ready",
 		Short:   "Run a local readiness check",
-		Long:    "Builds the standalone runtime and prints the shared readiness payload without HTTP-specific checks.",
+		Long:    "Loads config and probes repository availability without running migrations or config bootstrap.",
 		Example: "logmonitor ready\nlogmonitor ready --output json",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return a.withRuntime(cmd, func(ctx context.Context, runtime *generalapp.Runtime) error {
-				readiness := runtime.Readiness(ctx)
+			return a.withReadiness(cmd, func(_ context.Context, readiness runtimeinfo.Readiness) error {
 				if !readiness.Ready {
 					if err := a.printReadiness(readiness); err != nil {
 						return err
@@ -65,11 +64,11 @@ func (a *Application) newConfigValidateCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:     "validate",
 		Short:   "Validate config and show runtime warnings",
-		Long:    "Loads the selected CLI config, applies environment resolution and prints the runtime validation snapshot.",
+		Long:    "Loads the selected CLI config, applies environment resolution and prints the runtime validation snapshot without touching persistent storage.",
 		Example: "logmonitor config validate\nlogmonitor config validate --output json",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return a.withRuntime(cmd, func(_ context.Context, runtime *generalapp.Runtime) error {
-				return a.printRuntimeSnapshot(runtime.RuntimeState.Snapshot())
+			return a.withSnapshot(cmd, func(_ context.Context, snapshot runtimeinfo.Snapshot) error {
+				return a.printRuntimeSnapshot(snapshot)
 			})
 		},
 	}

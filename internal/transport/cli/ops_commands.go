@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	generalapp "github.com/lenchik/logmonitor/internal/app/general"
+	"github.com/lenchik/logmonitor/internal/runtimeinfo"
 	"github.com/spf13/cobra"
 )
 
@@ -281,8 +282,8 @@ func (a *Application) newRuntimeValidationCommand() *cobra.Command {
 		Use:   "validation",
 		Short: "Show runtime validation snapshot",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return a.withRuntime(cmd, func(_ context.Context, runtime *generalapp.Runtime) error {
-				return a.printRuntimeSnapshot(runtime.RuntimeState.Snapshot())
+			return a.withSnapshot(cmd, func(_ context.Context, snapshot runtimeinfo.Snapshot) error {
+				return a.printRuntimeSnapshot(snapshot)
 			})
 		},
 	}
