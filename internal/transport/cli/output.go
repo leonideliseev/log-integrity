@@ -171,6 +171,23 @@ func (a *Application) printRuntimeSnapshot(snapshot runtimeinfo.Snapshot) error 
 	return printTable(a.out(), []string{"FIELD", "VALUE"}, rows)
 }
 
+// printReadiness renders the same readiness payload used by the HTTP probe.
+func (a *Application) printReadiness(readiness runtimeinfo.Readiness) error {
+	if a.output == outputJSON {
+		return printJSON(a.out(), readiness)
+	}
+
+	rows := make([][]string, 0, len(readiness.Checks)+1)
+	rows = append(rows, []string{"ready", strconv.FormatBool(readiness.Ready)})
+	for _, check := range readiness.Checks {
+		rows = append(rows, []string{
+			check.Name,
+			strconv.FormatBool(check.Ready) + ": " + check.Message,
+		})
+	}
+	return printTable(a.out(), []string{"FIELD", "VALUE"}, rows)
+}
+
 // printDiscoverResults renders discovery outcomes per server and log file.
 func (a *Application) printDiscoverResults(items map[string]serverservice.DiscoverResult) error {
 	if a.output == outputJSON {

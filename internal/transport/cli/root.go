@@ -40,6 +40,10 @@ func NewRootCommand() *cobra.Command {
 	root.PersistentFlags().StringVarP(&application.output, "output", "o", outputTable, "Output format: table or json")
 
 	root.AddCommand(
+		application.newServeCommand(),
+		application.newHealthCommand(),
+		application.newReadyCommand(),
+		application.newConfigCommand(),
 		application.newServerCommand(),
 		application.newDiscoverCommand(),
 		application.newLogFileCommand(),

@@ -36,23 +36,17 @@ func NewServer(addr string, logger *slog.Logger, authToken string, serverService
 	checkHandler := handlers.NewCheckHandler(checkService, jobs)
 	jobHandler := handlers.NewJobHandler(jobs)
 	runtimeHandler := handlers.NewRuntimeHandler(runtimeState)
+	probeHandler := handlers.NewProbeHandler(func(c *gin.Context) runtimeinfo.Readiness {
+		return readiness(c.Request.Context())
+	})
 
 	engine := gin.New()
 	engine.Use(gin.Recovery())
 	engine.Use(middleware.RequestLogger(logger))
 	registerSwagger(engine)
 
-	engine.GET("/healthz", func(c *gin.Context) {
-		c.String(http.StatusOK, "ok")
-	})
-	engine.GET("/readyz", func(c *gin.Context) {
-		result := readiness(c.Request.Context())
-		if !result.Ready {
-			c.JSON(http.StatusServiceUnavailable, result)
-			return
-		}
-		c.JSON(http.StatusOK, result)
-	})
+	engine.GET("/healthz", probeHandler.Health)
+	engine.GET("/readyz", probeHandler.Ready)
 
 	apiGroup := engine.Group("/api", middleware.APIKeyAuth(authToken))
 	{

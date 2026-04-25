@@ -136,6 +136,11 @@ func (r *Runtime) SetSchedulerEnabled(enabled bool) {
 	r.RuntimeState.SetSchedulerEnabled(enabled)
 }
 
+// Readiness returns the current readiness snapshot for transports and CLI commands.
+func (r *Runtime) Readiness(ctx context.Context) runtimeinfo.Readiness {
+	return r.readiness(ctx)
+}
+
 // seedServers imports server definitions from config into the repository.
 func (r *Runtime) seedServers(ctx context.Context) error {
 	existing, err := r.Repo.ListServers(ctx)
