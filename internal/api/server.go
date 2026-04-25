@@ -11,11 +11,16 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/lenchik/logmonitor/internal/api/handlers"
 	"github.com/lenchik/logmonitor/internal/api/middleware"
+	jobqueue "github.com/lenchik/logmonitor/internal/jobs"
+	"github.com/lenchik/logmonitor/internal/runtimeinfo"
 	checkservice "github.com/lenchik/logmonitor/internal/service/check"
 	entryservice "github.com/lenchik/logmonitor/internal/service/entry"
 	logfileservice "github.com/lenchik/logmonitor/internal/service/logfile"
 	serverservice "github.com/lenchik/logmonitor/internal/service/server"
 )
+
+// ReadinessFunc computes the current readiness status for the process.
+type ReadinessFunc func(ctx context.Context) runtimeinfo.Readiness
 
 // Server wraps the Gin engine and HTTP server for API transport.
 type Server struct {
@@ -24,25 +29,42 @@ type Server struct {
 }
 
 // NewServer wires application services into the Gin HTTP layer.
-func NewServer(addr string, logger *slog.Logger, authToken string, serverService *serverservice.Service, logFileService *logfileservice.Service, entryService *entryservice.Service, checkService *checkservice.Service) *Server {
-	serverHandler := handlers.NewServerHandler(serverService)
-	logFileHandler := handlers.NewLogFileHandler(logFileService)
+func NewServer(addr string, logger *slog.Logger, authToken string, serverService *serverservice.Service, logFileService *logfileservice.Service, entryService *entryservice.Service, checkService *checkservice.Service, jobs *jobqueue.Manager, runtimeState *runtimeinfo.State, readiness ReadinessFunc) *Server {
+	serverHandler := handlers.NewServerHandler(serverService, jobs)
+	logFileHandler := handlers.NewLogFileHandler(logFileService, jobs)
 	entryHandler := handlers.NewEntryHandler(entryService)
-	checkHandler := handlers.NewCheckHandler(checkService)
+	checkHandler := handlers.NewCheckHandler(checkService, jobs)
+	jobHandler := handlers.NewJobHandler(jobs)
+	runtimeHandler := handlers.NewRuntimeHandler(runtimeState)
 
 	engine := gin.New()
 	engine.Use(gin.Recovery())
 	engine.Use(middleware.RequestLogger(logger))
+	registerSwagger(engine)
 
 	engine.GET("/healthz", func(c *gin.Context) {
 		c.String(http.StatusOK, "ok")
 	})
+	engine.GET("/readyz", func(c *gin.Context) {
+		result := readiness(c.Request.Context())
+		if !result.Ready {
+			c.JSON(http.StatusServiceUnavailable, result)
+			return
+		}
+		c.JSON(http.StatusOK, result)
+	})
 
 	apiGroup := engine.Group("/api", middleware.APIKeyAuth(authToken))
 	{
+		apiGroup.GET("/dashboard", serverHandler.Dashboard)
+		apiGroup.GET("/problems", serverHandler.ListProblems)
+		apiGroup.GET("/runtime/validation", runtimeHandler.Validation)
+		apiGroup.GET("/jobs", jobHandler.List)
+		apiGroup.GET("/jobs/:id", jobHandler.Get)
 		apiGroup.GET("/servers", serverHandler.List)
 		apiGroup.GET("/servers/:id", serverHandler.Get)
 		apiGroup.POST("/servers", serverHandler.Create)
+		apiGroup.POST("/servers/:id/retry", serverHandler.Retry)
 		apiGroup.PUT("/servers/:id", serverHandler.Update)
 		apiGroup.DELETE("/servers/:id", serverHandler.Delete)
 		apiGroup.POST("/servers/discover", serverHandler.Discover)

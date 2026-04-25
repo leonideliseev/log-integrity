@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/lenchik/logmonitor/internal/runtimeinfo"
 	"gopkg.in/yaml.v3"
 )
 
@@ -18,12 +19,14 @@ func LoadRuntime(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("config: read %q: %w", path, err)
 	}
-	data = []byte(expandEnvDefaults(string(data)))
+	expanded, envChecks := expandEnvDefaults(string(data))
+	data = []byte(expanded)
 
 	cfg := &Config{}
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("config: parse yaml: %w", err)
 	}
+	cfg.EnvChecks = envChecks
 
 	applyRuntimeDefaults(cfg)
 	if err := validateRuntime(cfg); err != nil {
@@ -34,22 +37,50 @@ func LoadRuntime(path string) (*Config, error) {
 }
 
 // expandEnvDefaults replaces ${VAR} and ${VAR:-default} placeholders in YAML content.
-func expandEnvDefaults(value string) string {
-	return envPattern.ReplaceAllStringFunc(value, func(match string) string {
+func expandEnvDefaults(value string) (string, []runtimeinfo.EnvCheck) {
+	checks := make([]runtimeinfo.EnvCheck, 0)
+	seen := make(map[string]struct{})
+	expanded := envPattern.ReplaceAllStringFunc(value, func(match string) string {
 		parts := envPattern.FindStringSubmatch(match)
 		if len(parts) == 0 {
 			return match
 		}
 
-		envValue, ok := os.LookupEnv(parts[1])
+		name := parts[1]
+		envValue, ok := os.LookupEnv(name)
 		if ok {
+			if _, exists := seen[name]; !exists {
+				checks = append(checks, runtimeinfo.EnvCheck{
+					Name:    name,
+					Status:  runtimeinfo.EnvCheckProvided,
+					Message: "value was loaded from the environment",
+				})
+				seen[name] = struct{}{}
+			}
 			return envValue
 		}
 		if len(parts) >= 4 && strings.HasPrefix(parts[2], ":-") {
+			if _, exists := seen[name]; !exists {
+				checks = append(checks, runtimeinfo.EnvCheck{
+					Name:    name,
+					Status:  runtimeinfo.EnvCheckDefaulted,
+					Message: "environment variable is missing, default value was applied",
+				})
+				seen[name] = struct{}{}
+			}
 			return parts[3]
+		}
+		if _, exists := seen[name]; !exists {
+			checks = append(checks, runtimeinfo.EnvCheck{
+				Name:    name,
+				Status:  runtimeinfo.EnvCheckMissing,
+				Message: "environment variable is missing, empty value was applied",
+			})
+			seen[name] = struct{}{}
 		}
 		return ""
 	})
+	return expanded, checks
 }
 
 // applyRuntimeDefaults fills optional config fields with fallback values.
@@ -122,6 +153,15 @@ func applyRuntimeDefaults(cfg *Config) {
 	if cfg.Health.LastErrorMaxLength == 0 {
 		cfg.Health.LastErrorMaxLength = 2048
 	}
+	if cfg.Jobs.Workers == 0 {
+		cfg.Jobs.Workers = 2
+	}
+	if cfg.Jobs.QueueSize == 0 {
+		cfg.Jobs.QueueSize = 128
+	}
+	if cfg.Jobs.HistoryLimit == 0 {
+		cfg.Jobs.HistoryLimit = 1000
+	}
 	if cfg.Workers.DiscoveryServers == 0 {
 		cfg.Workers.DiscoveryServers = 4
 	}
@@ -160,7 +200,7 @@ func validateRuntime(cfg *Config) error {
 	if len(cfg.Security.IntegrityHMACKey) < 16 {
 		return fmt.Errorf("security.integrity_hmac_key must contain at least 16 characters")
 	}
-	if databaseConfigured(cfg) && cfg.Security.AuthValueEncryptionKey == "" {
+	if !cfg.Runtime.DryRun && databaseConfigured(cfg) && cfg.Security.AuthValueEncryptionKey == "" {
 		return fmt.Errorf("security.auth_value_encryption_key is required when PostgreSQL storage is enabled")
 	}
 	if cfg.Security.AuthValueEncryptionKey != "" && len(cfg.Security.AuthValueEncryptionKey) < 16 {
@@ -189,6 +229,15 @@ func validateRuntime(cfg *Config) error {
 	}
 	if cfg.Health.LastErrorMaxLength < 0 {
 		return fmt.Errorf("health.last_error_max_length must be greater than or equal to zero")
+	}
+	if cfg.Jobs.Workers <= 0 {
+		return fmt.Errorf("jobs.workers must be greater than zero")
+	}
+	if cfg.Jobs.QueueSize <= 0 {
+		return fmt.Errorf("jobs.queue_size must be greater than zero")
+	}
+	if cfg.Jobs.HistoryLimit <= 0 {
+		return fmt.Errorf("jobs.history_limit must be greater than zero")
 	}
 	if cfg.SSH.ConnectTimeoutSeconds < 0 {
 		return fmt.Errorf("ssh.connect_timeout_seconds must be greater than or equal to zero")

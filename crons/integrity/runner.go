@@ -3,6 +3,7 @@ package integritycron
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 
@@ -117,21 +118,28 @@ func (r *Runner) processServer(ctx context.Context, serverModel *models.Server) 
 			active = append(active, logFile)
 		}
 	}
-
-	err = r.runLogFileWorkers(ctx, serverModel, active)
-	if err == nil {
-		_ = r.health.RecordSuccess(ctx, serverModel.ID)
+	if len(active) == 0 {
+		r.logger.Debug("skip integrity because server has no active log files", "server", serverModel.Name)
 		return
 	}
-	_ = r.health.RecordFailure(ctx, serverModel, err)
+
+	summary := r.runLogFileWorkers(ctx, serverModel, active)
+	switch {
+	case summary.failureCount == 0 && summary.tamperedCount == 0:
+		_ = r.health.RecordSuccess(ctx, serverModel.ID)
+	case summary.successCount == 0:
+		_ = r.health.RecordFailure(ctx, serverModel, summary.firstErr)
+	default:
+		_ = r.health.RecordDegraded(ctx, serverModel.ID, buildIntegrityDegradedMessage(summary.failureCount, summary.tamperedCount, len(active)))
+	}
 }
 
 // runLogFileWorkers checks log files of one server with a bounded worker pool.
-func (r *Runner) runLogFileWorkers(ctx context.Context, serverModel *models.Server, logFiles []*models.LogFile) error {
+func (r *Runner) runLogFileWorkers(ctx context.Context, serverModel *models.Server, logFiles []*models.LogFile) integritySummary {
 	sem := make(chan struct{}, r.options.MaxLogFileWorkersPerHost)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
-	var firstErr error
+	summary := integritySummary{}
 
 	for _, logFile := range logFiles {
 		if ctx.Err() != nil {
@@ -142,19 +150,28 @@ func (r *Runner) runLogFileWorkers(ctx context.Context, serverModel *models.Serv
 		go func(logFile *models.LogFile) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			if _, _, err := r.integrity.CheckLogFile(ctx, serverModel, logFile); err != nil {
+			result, _, err := r.integrity.CheckLogFile(ctx, serverModel, logFile)
+			if err != nil {
 				mu.Lock()
-				if firstErr == nil {
-					firstErr = err
+				if summary.firstErr == nil {
+					summary.firstErr = err
 				}
+				summary.failureCount++
 				mu.Unlock()
 				r.logger.Error("integrity check", "server", serverModel.Name, "log_file", logFile.Path, "error", err)
+				return
 			}
+			mu.Lock()
+			summary.successCount++
+			if result != nil && result.Status == models.CheckStatusTampered {
+				summary.tamperedCount++
+			}
+			mu.Unlock()
 		}(logFile)
 	}
 
 	wg.Wait()
-	return firstErr
+	return summary
 }
 
 // tryLockServer acquires a non-blocking server lock when isolation is enabled.
@@ -174,4 +191,24 @@ func normalizeOptions(options Options) Options {
 		options.MaxLogFileWorkersPerHost = 1
 	}
 	return options
+}
+
+// buildIntegrityDegradedMessage summarizes partial integrity issues on a reachable server.
+func buildIntegrityDegradedMessage(failureCount, tamperedCount, total int) string {
+	switch {
+	case failureCount > 0 && tamperedCount > 0:
+		return fmt.Sprintf("integrity completed with %d check errors and %d tampered log files out of %d", failureCount, tamperedCount, total)
+	case failureCount > 0:
+		return fmt.Sprintf("integrity partially failed for %d of %d log files", failureCount, total)
+	default:
+		return fmt.Sprintf("integrity detected tampering in %d of %d log files", tamperedCount, total)
+	}
+}
+
+// integritySummary aggregates one integrity cycle outcome for a server.
+type integritySummary struct {
+	successCount  int
+	failureCount  int
+	tamperedCount int
+	firstErr      error
 }

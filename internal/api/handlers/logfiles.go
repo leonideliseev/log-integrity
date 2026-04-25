@@ -1,20 +1,25 @@
 package handlers
 
 import (
+	"context"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
+	jobqueue "github.com/lenchik/logmonitor/internal/jobs"
 	logfileservice "github.com/lenchik/logmonitor/internal/service/logfile"
+	"github.com/lenchik/logmonitor/models"
 )
 
 // LogFileHandler handles HTTP requests related to remote log files.
 type LogFileHandler struct {
 	service *logfileservice.Service
+	jobs    *jobqueue.Manager
 }
 
 // NewLogFileHandler creates a log file handler with required dependencies.
-func NewLogFileHandler(service *logfileservice.Service) *LogFileHandler {
-	return &LogFileHandler{service: service}
+func NewLogFileHandler(service *logfileservice.Service, jobs *jobqueue.Manager) *LogFileHandler {
+	return &LogFileHandler{service: service, jobs: jobs}
 }
 
 // List returns active log files or log files of a concrete server.
@@ -40,15 +45,39 @@ func (h *LogFileHandler) Collect(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, err.Error())
 		return
 	}
+	payload.ServerID = strings.TrimSpace(payload.ServerID)
+	payload.LogFileID = strings.TrimSpace(payload.LogFileID)
 	if payload.ServerID == "" {
 		writeError(c, http.StatusBadRequest, "server_id is required")
 		return
 	}
 
-	result, err := h.service.Collect(c.Request.Context(), payload.ServerID, payload.LogFileID)
+	job, _, err := h.jobs.Submit(jobqueue.TaskSpec{
+		Type:           models.JobTypeCollect,
+		IdempotencyKey: idempotencyKeyFromHeader(c),
+		Fingerprint:    collectFingerprint(payload.ServerID, payload.LogFileID),
+		ServerID:       payload.ServerID,
+		LogFileID:      payload.LogFileID,
+		Run: func(ctx context.Context) (any, error) {
+			result, err := h.service.Collect(ctx, payload.ServerID, payload.LogFileID)
+			if err != nil {
+				return nil, err
+			}
+			return collectResultResponses(result), nil
+		},
+	})
 	if err != nil {
-		writeServiceError(c, err)
+		writeJobError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, collectResultResponses(result))
+	c.Header("Location", "/api/jobs/"+job.ID)
+	c.JSON(http.StatusAccepted, newJobResponse(job))
+}
+
+// collectFingerprint keeps repeated manual collection requests idempotent while the same work is still active.
+func collectFingerprint(serverID, logFileID string) string {
+	if logFileID == "" {
+		return "collect:" + serverID + ":all"
+	}
+	return "collect:" + serverID + ":" + logFileID
 }

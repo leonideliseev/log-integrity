@@ -3,6 +3,7 @@ package collectioncron
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 
@@ -117,21 +118,28 @@ func (r *Runner) processServer(ctx context.Context, serverModel *models.Server) 
 			active = append(active, logFile)
 		}
 	}
-
-	err = r.runLogFileWorkers(ctx, serverModel, active)
-	if err == nil {
-		_ = r.health.RecordSuccess(ctx, serverModel.ID)
+	if len(active) == 0 {
+		r.logger.Debug("skip collection because server has no active log files", "server", serverModel.Name)
 		return
 	}
-	_ = r.health.RecordFailure(ctx, serverModel, err)
+
+	summary := r.runLogFileWorkers(ctx, serverModel, active)
+	switch {
+	case summary.failureCount == 0:
+		_ = r.health.RecordSuccess(ctx, serverModel.ID)
+	case summary.successCount == 0:
+		_ = r.health.RecordFailure(ctx, serverModel, summary.firstErr)
+	default:
+		_ = r.health.RecordDegraded(ctx, serverModel.ID, fmt.Sprintf("collection partially failed for %d of %d log files", summary.failureCount, len(active)))
+	}
 }
 
 // runLogFileWorkers collects log files of one server with a bounded worker pool.
-func (r *Runner) runLogFileWorkers(ctx context.Context, serverModel *models.Server, logFiles []*models.LogFile) error {
+func (r *Runner) runLogFileWorkers(ctx context.Context, serverModel *models.Server, logFiles []*models.LogFile) collectionSummary {
 	sem := make(chan struct{}, r.options.MaxLogFileWorkersPerHost)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
-	var firstErr error
+	summary := collectionSummary{}
 
 	for _, logFile := range logFiles {
 		if ctx.Err() != nil {
@@ -144,17 +152,22 @@ func (r *Runner) runLogFileWorkers(ctx context.Context, serverModel *models.Serv
 			defer func() { <-sem }()
 			if _, err := r.collector.CollectLogFile(ctx, serverModel, logFile); err != nil {
 				mu.Lock()
-				if firstErr == nil {
-					firstErr = err
+				if summary.firstErr == nil {
+					summary.firstErr = err
 				}
+				summary.failureCount++
 				mu.Unlock()
 				r.logger.Error("collect log entries", "server", serverModel.Name, "log_file", logFile.Path, "error", err)
+				return
 			}
+			mu.Lock()
+			summary.successCount++
+			mu.Unlock()
 		}(logFile)
 	}
 
 	wg.Wait()
-	return firstErr
+	return summary
 }
 
 // tryLockServer acquires a non-blocking server lock when isolation is enabled.
@@ -174,4 +187,11 @@ func normalizeOptions(options Options) Options {
 		options.MaxLogFileWorkersPerHost = 1
 	}
 	return options
+}
+
+// collectionSummary aggregates one collection cycle outcome for a server.
+type collectionSummary struct {
+	successCount int
+	failureCount int
+	firstErr     error
 }

@@ -80,6 +80,11 @@ func (s *Storage) Close() error {
 	return nil
 }
 
+// Ping checks whether the PostgreSQL pool can reach the database.
+func (s *Storage) Ping(ctx context.Context) error {
+	return s.pool.Ping(ctx)
+}
+
 func runMigrations(dsn, dir string) error {
 	if dir == "" {
 		dir = "migrations"

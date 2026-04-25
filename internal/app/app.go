@@ -15,9 +15,11 @@ import (
 	"github.com/lenchik/logmonitor/crons/locks"
 	"github.com/lenchik/logmonitor/crons/scheduler"
 	"github.com/lenchik/logmonitor/internal/api"
+	jobqueue "github.com/lenchik/logmonitor/internal/jobs"
 	"github.com/lenchik/logmonitor/internal/repository"
 	"github.com/lenchik/logmonitor/internal/repository/memory"
 	"github.com/lenchik/logmonitor/internal/repository/postgres"
+	"github.com/lenchik/logmonitor/internal/runtimeinfo"
 	"github.com/lenchik/logmonitor/internal/security"
 	checkappservice "github.com/lenchik/logmonitor/internal/service/check"
 	collectservice "github.com/lenchik/logmonitor/internal/service/collector"
@@ -37,6 +39,7 @@ type App struct {
 	cfg       *config.Config
 	logger    *slog.Logger
 	repo      repository.Repository
+	jobs      *jobqueue.Manager
 	apiServer *api.Server
 	scheduler *scheduler.Scheduler
 
@@ -45,15 +48,28 @@ type App struct {
 	integrity *integrityservice.Service
 	health    *healthservice.Service
 	locks     *locks.Manager
+	runtime   *runtimeinfo.State
 }
 
 // New wires repositories, services, API server and cron jobs into one application.
 func New(cfg *config.Config) (*App, error) {
 	log := logger.New("info")
-	store, err := buildRepository(cfg)
+	runtimeState := runtimeinfo.NewState()
+	runtimeState.SetDryRun(cfg.Runtime.DryRun)
+	runtimeState.SetEnvChecks(cfg.EnvChecks)
+
+	store, backend, err := buildRepository(cfg)
 	if err != nil {
 		return nil, err
 	}
+	runtimeState.SetStorageBackend(backend)
+	if cfg.Runtime.DryRun {
+		runtimeState.AddWarning("dry-run-enabled", "dry-run mode is enabled: background jobs are disabled and the in-memory repository is used")
+	}
+	if cfg.Runtime.DryRun && databaseConfigured(cfg) {
+		runtimeState.AddWarning("dry-run-database-skipped", "database configuration was ignored because dry-run mode is enabled")
+	}
+
 	sshFactory, err := sshclient.NewClientFactoryWithOptions(sshclient.Options{
 		ConnectTimeout:        time.Duration(cfg.SSH.ConnectTimeoutSeconds) * time.Second,
 		CommandTimeout:        time.Duration(cfg.SSH.CommandTimeoutSeconds) * time.Second,
@@ -88,20 +104,22 @@ func New(cfg *config.Config) (*App, error) {
 	checkService := checkappservice.NewServiceWithHealthAndLocker(store, store, store, integrityService, healthService, lockManager)
 
 	address := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
-	apiServer := api.NewServer(address, log, cfg.API.AuthToken, serverService, logFileService, entryService, checkService)
-
 	app := &App{
 		cfg:       cfg,
 		logger:    log,
 		repo:      store,
-		apiServer: apiServer,
+		jobs:      jobqueue.NewManager(log, jobqueue.Options{Workers: cfg.Jobs.Workers, QueueSize: cfg.Jobs.QueueSize, HistoryLimit: cfg.Jobs.HistoryLimit}),
 		scheduler: scheduler.New(),
 		discovery: discoveryService,
 		collector: collectorService,
 		integrity: integrityService,
 		health:    healthService,
 		locks:     lockManager,
+		runtime:   runtimeState,
 	}
+	apiServer := api.NewServer(address, log, cfg.API.AuthToken, serverService, logFileService, entryService, checkService, app.jobs, runtimeState, app.readiness)
+
+	app.apiServer = apiServer
 
 	if err := app.seedServers(context.Background()); err != nil {
 		return nil, err
@@ -109,6 +127,7 @@ func New(cfg *config.Config) (*App, error) {
 	if err := app.registerJobs(); err != nil {
 		return nil, err
 	}
+	app.runtime.SetSchedulerEnabled(!cfg.Runtime.DryRun)
 
 	return app, nil
 }
@@ -122,14 +141,17 @@ func buildLockManager(cfg *config.Config) *locks.Manager {
 }
 
 // buildRepository selects PostgreSQL when database settings are provided and falls back to memory otherwise.
-func buildRepository(cfg *config.Config) (repository.Repository, error) {
+func buildRepository(cfg *config.Config) (repository.Repository, string, error) {
+	if cfg.Runtime.DryRun {
+		return memory.New(), "memory", nil
+	}
 	if cfg.Database.Host == "" || cfg.Database.User == "" || cfg.Database.DBName == "" {
-		return memory.New(), nil
+		return memory.New(), "memory", nil
 	}
 
 	authCipher, err := security.NewStringCipher(cfg.Security.AuthValueEncryptionKey)
 	if err != nil {
-		return nil, fmt.Errorf("app: create auth value cipher: %w", err)
+		return nil, "", fmt.Errorf("app: create auth value cipher: %w", err)
 	}
 
 	store, err := postgres.OpenWithOptions(cfg.Database.DSN(), postgres.Options{
@@ -139,16 +161,27 @@ func buildRepository(cfg *config.Config) (repository.Repository, error) {
 		AuthCipher:    authCipher,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("app: open postgres repository: %w", err)
+		return nil, "", fmt.Errorf("app: open postgres repository: %w", err)
 	}
 
-	return store, nil
+	return store, "postgres", nil
 }
 
 // Run starts background jobs and the API server until the context is canceled.
 func (a *App) Run(ctx context.Context) (err error) {
-	a.scheduler.Start(ctx)
-	defer a.scheduler.Stop()
+	a.jobs.Start(ctx)
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if shutdownErr := a.jobs.Shutdown(shutdownCtx); err == nil && shutdownErr != nil {
+			err = fmt.Errorf("app: shutdown jobs: %w", shutdownErr)
+		}
+	}()
+
+	if !a.cfg.Runtime.DryRun {
+		a.scheduler.Start(ctx)
+		defer a.scheduler.Stop()
+	}
 	defer func() {
 		if closeErr := a.repo.Close(); err == nil && closeErr != nil {
 			err = fmt.Errorf("app: close repository: %w", closeErr)
@@ -190,7 +223,9 @@ func (a *App) seedServers(ctx context.Context) error {
 				serverModel.Status = models.ServerStatusActive
 			}
 			if err := a.repo.UpdateServer(ctx, serverModel); err != nil {
-				return fmt.Errorf("app: update server %q: %w", item.Name, err)
+				a.runtime.AddWarning("seed-server-skipped", fmt.Sprintf("server %q was skipped during bootstrap: %v", item.Name, err))
+				a.logger.Warn("skip server bootstrap update", "server", item.Name, "error", err)
+				continue
 			}
 			existing = replaceServer(existing, serverModel)
 			continue
@@ -199,7 +234,9 @@ func (a *App) seedServers(ctx context.Context) error {
 		serverModel := serverModelFromConfig(item)
 
 		if err := a.repo.CreateServer(ctx, serverModel); err != nil {
-			return fmt.Errorf("app: create server %q: %w", item.Name, err)
+			a.runtime.AddWarning("seed-server-skipped", fmt.Sprintf("server %q was skipped during bootstrap: %v", item.Name, err))
+			a.logger.Warn("skip server bootstrap create", "server", item.Name, "error", err)
+			continue
 		}
 		existing = append(existing, serverModel)
 	}
@@ -209,6 +246,9 @@ func (a *App) seedServers(ctx context.Context) error {
 
 // registerJobs registers all configured cron jobs in the scheduler.
 func (a *App) registerJobs() error {
+	if a.cfg.Runtime.DryRun {
+		return nil
+	}
 	discoveryInterval, err := scheduler.ParseInterval(a.cfg.Scheduler.DiscoveryCron)
 	if err != nil {
 		return err
@@ -289,4 +329,66 @@ func findServerByNameOrHost(servers []*models.Server, name, host string) *models
 		}
 	}
 	return nil
+}
+
+// databaseConfigured reports whether PostgreSQL settings are present enough to attempt a real connection.
+func databaseConfigured(cfg *config.Config) bool {
+	return cfg.Database.Host != "" && cfg.Database.User != "" && cfg.Database.DBName != ""
+}
+
+// readiness reports whether the process is ready to serve traffic and background tasks.
+func (a *App) readiness(ctx context.Context) runtimeinfo.Readiness {
+	checks := make([]runtimeinfo.Check, 0, 3)
+
+	if err := a.repo.Ping(ctx); err != nil {
+		checks = append(checks, runtimeinfo.Check{
+			Name:    "repository",
+			Ready:   false,
+			Message: err.Error(),
+		})
+	} else {
+		checks = append(checks, runtimeinfo.Check{
+			Name:    "repository",
+			Ready:   true,
+			Message: "repository is reachable",
+		})
+	}
+
+	checks = append(checks, runtimeinfo.Check{
+		Name:    "api",
+		Ready:   true,
+		Message: "http api is initialized",
+	})
+	checks = append(checks, runtimeinfo.Check{
+		Name:    "jobs",
+		Ready:   true,
+		Message: "async job queue is configured",
+	})
+
+	if a.cfg.Runtime.DryRun {
+		checks = append(checks, runtimeinfo.Check{
+			Name:    "scheduler",
+			Ready:   true,
+			Message: "scheduler is intentionally disabled in dry-run mode",
+		})
+	} else {
+		checks = append(checks, runtimeinfo.Check{
+			Name:    "scheduler",
+			Ready:   true,
+			Message: "scheduler is configured",
+		})
+	}
+
+	ready := true
+	for _, check := range checks {
+		if !check.Ready {
+			ready = false
+			break
+		}
+	}
+
+	return runtimeinfo.Readiness{
+		Ready:  ready,
+		Checks: checks,
+	}
 }

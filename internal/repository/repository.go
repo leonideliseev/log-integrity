@@ -1,5 +1,7 @@
 package repository
 
+import "context"
+
 // Repository combines all storage interfaces required by the application.
 type Repository interface {
 	ServerRepository
@@ -9,5 +11,6 @@ type Repository interface {
 	LogBatchRepository
 	CheckResultRepository
 
+	Ping(ctx context.Context) error
 	Close() error
 }

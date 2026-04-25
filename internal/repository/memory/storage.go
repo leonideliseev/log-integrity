@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"sync"
 
 	"github.com/lenchik/logmonitor/models"
@@ -38,5 +39,10 @@ func New() *Storage {
 
 // Close exists to satisfy the repository contract.
 func (s *Storage) Close() error {
+	return nil
+}
+
+// Ping reports that the in-memory repository is always ready.
+func (s *Storage) Ping(_ context.Context) error {
 	return nil
 }

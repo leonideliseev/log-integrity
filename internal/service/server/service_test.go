@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lenchik/logmonitor/crons/locks"
 	"github.com/lenchik/logmonitor/internal/repository/memory"
@@ -200,6 +201,70 @@ func TestServerServiceRejectsConfigManagedMutation(t *testing.T) {
 			err := service.Delete(ctx, serverModel.ID)
 			step.Require().Error(err)
 			step.Require().Contains(err.Error(), "managed by config")
+		})
+	})
+}
+
+func TestServerServiceRetryAndListProblems(t *testing.T) {
+	runner.Run(t, "server service exposes retry and operational problems", func(t provider.T) {
+		t.Epic("Service layer")
+		t.Feature("Server application service")
+		t.Story("Operational visibility")
+		t.Title("Lists aggregated problems and clears retry state")
+
+		ctx := context.Background()
+		store := memory.New()
+		service := serverservice.NewService(store, discoveryservice.NewService(&testsupport.SSHClientFactory{}, store, nil))
+
+		serverModel := &models.Server{
+			ID:           "srv-problem",
+			Name:         "problem-host",
+			Host:         "10.0.0.30",
+			Port:         22,
+			Username:     "demo",
+			AuthType:     models.AuthPassword,
+			AuthValue:    "secret",
+			Status:       models.ServerStatusError,
+			ManagedBy:    models.ServerManagedByAPI,
+			LastError:    "ssh connection refused",
+			FailureCount: 2,
+		}
+		backoffUntil := time.Date(2026, 4, 23, 14, 0, 0, 0, time.UTC)
+		serverModel.BackoffUntil = &backoffUntil
+		t.Require().NoError(store.CreateServer(ctx, serverModel))
+
+		logFile := &models.LogFile{
+			ID:       "log-problem",
+			ServerID: serverModel.ID,
+			Path:     "/var/log/syslog",
+			LogType:  models.LogTypeSyslog,
+			IsActive: true,
+		}
+		t.Require().NoError(store.CreateLogFile(ctx, logFile))
+		t.Require().NoError(store.CreateCheckResult(ctx, &models.CheckResult{
+			ID:            "check-problem",
+			LogFileID:     logFile.ID,
+			CheckedAt:     time.Date(2026, 4, 23, 13, 0, 0, 0, time.UTC),
+			Status:        models.CheckStatusTampered,
+			TotalLines:    10,
+			TamperedLines: 2,
+		}))
+
+		t.WithNewStep("List aggregated server and integrity problems", func(step provider.StepCtx) {
+			problems, err := service.ListProblems(ctx)
+			step.Require().NoError(err)
+			step.Require().Len(problems, 3)
+			step.Require().Equal(models.ProblemSeverityCritical, problems[0].Severity)
+			step.Require().Equal(models.ProblemTypeIntegrityTampered, problems[0].Type)
+		})
+
+		t.WithNewStep("Clear retry state for the failed server", func(step provider.StepCtx) {
+			updatedServer, err := service.Retry(ctx, serverModel.ID)
+			step.Require().NoError(err)
+			step.Require().Equal(models.ServerStatusActive, updatedServer.Status)
+			step.Require().Nil(updatedServer.BackoffUntil)
+			step.Require().Zero(updatedServer.FailureCount)
+			step.Require().Empty(updatedServer.LastError)
 		})
 	})
 }

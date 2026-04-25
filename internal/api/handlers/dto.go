@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"time"
 
 	checkservice "github.com/lenchik/logmonitor/internal/service/check"
@@ -33,13 +34,15 @@ type logEntryResponse struct {
 }
 
 type checkResultResponse struct {
-	ID            string             `json:"id"`
-	LogFileID     string             `json:"log_file_id"`
-	CheckedAt     time.Time          `json:"checked_at"`
-	Status        models.CheckStatus `json:"status"`
-	TotalLines    int64              `json:"total_lines"`
-	TamperedLines int64              `json:"tampered_lines"`
-	ErrorMessage  string             `json:"error_message,omitempty"`
+	ID            string                 `json:"id"`
+	LogFileID     string                 `json:"log_file_id"`
+	CheckedAt     time.Time              `json:"checked_at"`
+	Status        models.CheckStatus     `json:"status"`
+	Severity      models.ProblemSeverity `json:"severity,omitempty"`
+	ProblemType   models.ProblemType     `json:"problem_type,omitempty"`
+	TotalLines    int64                  `json:"total_lines"`
+	TamperedLines int64                  `json:"tampered_lines"`
+	ErrorMessage  string                 `json:"error_message,omitempty"`
 }
 
 type tamperedEntryResponse struct {
@@ -63,6 +66,60 @@ type runResultResponse struct {
 	Result          *checkResultResponse    `json:"result,omitempty"`
 	TamperedEntries []tamperedEntryResponse `json:"tampered_entries,omitempty"`
 	Error           string                  `json:"error,omitempty"`
+}
+
+type systemProblemResponse struct {
+	Severity   models.ProblemSeverity `json:"severity"`
+	Type       models.ProblemType     `json:"type"`
+	ServerID   string                 `json:"server_id,omitempty"`
+	ServerName string                 `json:"server_name,omitempty"`
+	LogFileID  string                 `json:"log_file_id,omitempty"`
+	LogPath    string                 `json:"log_path,omitempty"`
+	Message    string                 `json:"message"`
+	DetectedAt time.Time              `json:"detected_at"`
+}
+
+type dashboardResponse struct {
+	Servers        dashboardServerCounters  `json:"servers"`
+	LogFiles       dashboardLogFileCounters `json:"log_files"`
+	Problems       dashboardProblemCounters `json:"problems"`
+	RecentProblems []systemProblemResponse  `json:"recent_problems"`
+}
+
+type dashboardServerCounters struct {
+	Total    int `json:"total"`
+	Active   int `json:"active"`
+	Degraded int `json:"degraded"`
+	Inactive int `json:"inactive"`
+	Error    int `json:"error"`
+}
+
+type dashboardLogFileCounters struct {
+	Total    int `json:"total"`
+	Active   int `json:"active"`
+	Inactive int `json:"inactive"`
+}
+
+type dashboardProblemCounters struct {
+	Total    int `json:"total"`
+	Warning  int `json:"warning"`
+	Error    int `json:"error"`
+	Critical int `json:"critical"`
+}
+
+type jobResponse struct {
+	ID             string           `json:"id"`
+	Type           models.JobType   `json:"type"`
+	Status         models.JobStatus `json:"status"`
+	IdempotencyKey string           `json:"idempotency_key,omitempty"`
+	Fingerprint    string           `json:"fingerprint,omitempty"`
+	ServerID       string           `json:"server_id,omitempty"`
+	LogFileID      string           `json:"log_file_id,omitempty"`
+	Error          string           `json:"error,omitempty"`
+	Result         json.RawMessage  `json:"result,omitempty"`
+	CreatedAt      time.Time        `json:"created_at"`
+	StartedAt      *time.Time       `json:"started_at,omitempty"`
+	FinishedAt     *time.Time       `json:"finished_at,omitempty"`
 }
 
 // logFileResponses converts log file domain models to API responses.
@@ -128,6 +185,8 @@ func newCheckResultResponse(checkResult *models.CheckResult) checkResultResponse
 		LogFileID:     checkResult.LogFileID,
 		CheckedAt:     checkResult.CheckedAt,
 		Status:        checkResult.Status,
+		Severity:      models.SeverityForCheckStatus(checkResult.Status),
+		ProblemType:   models.ProblemTypeForCheckStatus(checkResult.Status),
 		TotalLines:    checkResult.TotalLines,
 		TamperedLines: checkResult.TamperedLines,
 		ErrorMessage:  checkResult.ErrorMessage,
@@ -191,6 +250,76 @@ func runResultResponses(items map[string]checkservice.RunResult) map[string]runR
 	return result
 }
 
+// systemProblemResponses converts service-level operational problems to transport DTOs.
+func systemProblemResponses(items []models.SystemProblem) []systemProblemResponse {
+	result := make([]systemProblemResponse, 0, len(items))
+	for _, item := range items {
+		result = append(result, systemProblemResponse{
+			Severity:   item.Severity,
+			Type:       item.Type,
+			ServerID:   item.ServerID,
+			ServerName: item.ServerName,
+			LogFileID:  item.LogFileID,
+			LogPath:    item.LogPath,
+			Message:    item.Message,
+			DetectedAt: item.DetectedAt,
+		})
+	}
+	return result
+}
+
+// newDashboardResponse converts aggregated dashboard data to a transport DTO.
+func newDashboardResponse(dashboard *serverservice.Dashboard) dashboardResponse {
+	return dashboardResponse{
+		Servers: dashboardServerCounters{
+			Total:    dashboard.Servers.Total,
+			Active:   dashboard.Servers.Active,
+			Degraded: dashboard.Servers.Degraded,
+			Inactive: dashboard.Servers.Inactive,
+			Error:    dashboard.Servers.Error,
+		},
+		LogFiles: dashboardLogFileCounters{
+			Total:    dashboard.LogFiles.Total,
+			Active:   dashboard.LogFiles.Active,
+			Inactive: dashboard.LogFiles.Inactive,
+		},
+		Problems: dashboardProblemCounters{
+			Total:    dashboard.Problems.Total,
+			Warning:  dashboard.Problems.Warning,
+			Error:    dashboard.Problems.Error,
+			Critical: dashboard.Problems.Critical,
+		},
+		RecentProblems: systemProblemResponses(dashboard.RecentProblems),
+	}
+}
+
+// jobResponses converts async job models to transport DTOs.
+func jobResponses(items []*models.Job) []jobResponse {
+	result := make([]jobResponse, 0, len(items))
+	for _, item := range items {
+		result = append(result, newJobResponse(item))
+	}
+	return result
+}
+
+// newJobResponse converts one async job model to a transport DTO.
+func newJobResponse(job *models.Job) jobResponse {
+	return jobResponse{
+		ID:             job.ID,
+		Type:           job.Type,
+		Status:         job.Status,
+		IdempotencyKey: job.IdempotencyKey,
+		Fingerprint:    job.Fingerprint,
+		ServerID:       job.ServerID,
+		LogFileID:      job.LogFileID,
+		Error:          job.Error,
+		Result:         cloneRawJSON(job.Result),
+		CreatedAt:      job.CreatedAt,
+		StartedAt:      cloneTimePointer(job.StartedAt),
+		FinishedAt:     cloneTimePointer(job.FinishedAt),
+	}
+}
+
 // cloneStringMap protects response DTOs from sharing mutable maps with domain models.
 func cloneStringMap(input map[string]string) map[string]string {
 	if input == nil {
@@ -201,4 +330,23 @@ func cloneStringMap(input map[string]string) map[string]string {
 		result[key] = value
 	}
 	return result
+}
+
+// cloneRawJSON protects response payloads from sharing mutable JSON slices with job history.
+func cloneRawJSON(input json.RawMessage) json.RawMessage {
+	if input == nil {
+		return nil
+	}
+	result := make(json.RawMessage, len(input))
+	copy(result, input)
+	return result
+}
+
+// cloneTimePointer allocates an independent copy of an optional timestamp pointer.
+func cloneTimePointer(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+	result := *value
+	return &result
 }

@@ -76,9 +76,14 @@ func (s *Service) Run(ctx context.Context, serverID, logFileID string) (map[stri
 	if err != nil {
 		return nil, err
 	}
+	if len(logFiles) == 0 {
+		return map[string]RunResult{}, nil
+	}
 
 	result := make(map[string]RunResult, len(logFiles))
-	success := true
+	successCount := 0
+	failureCount := 0
+	tamperedCount := 0
 	var firstErr error
 	for _, logFile := range logFiles {
 		checkResult, tamperedEntries, checkErr := s.integrity.CheckLogFile(ctx, serverModel, logFile)
@@ -86,9 +91,13 @@ func (s *Service) Run(ctx context.Context, serverID, logFileID string) (map[stri
 			if firstErr == nil {
 				firstErr = checkErr
 			}
-			success = false
+			failureCount++
 			result[logFile.ID] = RunResult{Error: checkErr.Error()}
 			continue
+		}
+		successCount++
+		if checkResult != nil && checkResult.Status == models.CheckStatusTampered {
+			tamperedCount++
 		}
 		result[logFile.ID] = RunResult{
 			Result:          checkResult,
@@ -96,10 +105,13 @@ func (s *Service) Run(ctx context.Context, serverID, logFileID string) (map[stri
 		}
 	}
 
-	if success {
+	switch {
+	case failureCount == 0 && tamperedCount == 0:
 		_ = s.health.RecordSuccess(ctx, serverModel.ID)
-	} else {
+	case successCount == 0:
 		_ = s.health.RecordFailure(ctx, serverModel, firstErr)
+	default:
+		_ = s.health.RecordDegraded(ctx, serverModel.ID, buildIntegrityDegradedMessage(failureCount, tamperedCount, len(logFiles)))
 	}
 
 	return result, nil
@@ -126,4 +138,16 @@ func (s *Service) tryLockServer(serverID string) (func(), bool) {
 		return func() {}, true
 	}
 	return s.locker.TryLock("server:" + serverID)
+}
+
+// buildIntegrityDegradedMessage summarizes partial integrity issues on a reachable server.
+func buildIntegrityDegradedMessage(failureCount, tamperedCount, total int) string {
+	switch {
+	case failureCount > 0 && tamperedCount > 0:
+		return fmt.Sprintf("integrity completed with %d check errors and %d tampered log files out of %d", failureCount, tamperedCount, total)
+	case failureCount > 0:
+		return fmt.Sprintf("integrity partially failed for %d of %d log files", failureCount, total)
+	default:
+		return fmt.Sprintf("integrity detected tampering in %d of %d log files", tamperedCount, total)
+	}
 }

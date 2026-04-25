@@ -1,6 +1,8 @@
 // Package config describes and loads application configuration.
 package config
 
+import "github.com/lenchik/logmonitor/internal/runtimeinfo"
+
 // Config — корневая конфигурация приложения
 type Config struct {
 	Server    ServerConfig    `yaml:"server"`
@@ -11,8 +13,12 @@ type Config struct {
 	Scheduler SchedulerConfig `yaml:"scheduler"`
 	Collector CollectorConfig `yaml:"collector"`
 	Health    HealthConfig    `yaml:"health"`
+	Jobs      JobsConfig      `yaml:"jobs"`
+	Runtime   RuntimeConfig   `yaml:"runtime"`
 	Workers   WorkerConfig    `yaml:"workers"`
 	Servers   []ServerEntry   `yaml:"servers"`
+
+	EnvChecks []runtimeinfo.EnvCheck `yaml:"-"`
 }
 
 // ServerConfig — настройки HTTP-сервера
@@ -59,6 +65,18 @@ type CollectorConfig struct {
 	ChunkSize       int    `yaml:"chunk_size"`
 	StoreRawContent *bool  `yaml:"store_raw_content"`
 	ChunkHashAlgo   string `yaml:"chunk_hash_algo"`
+}
+
+// RuntimeConfig stores startup behavior toggles used for local and diagnostic runs.
+type RuntimeConfig struct {
+	DryRun bool `yaml:"dry_run"`
+}
+
+// JobsConfig stores async queue sizing and history retention settings.
+type JobsConfig struct {
+	Workers      int `yaml:"workers"`
+	QueueSize    int `yaml:"queue_size"`
+	HistoryLimit int `yaml:"history_limit"`
 }
 
 // HealthConfig stores server availability lifecycle settings.

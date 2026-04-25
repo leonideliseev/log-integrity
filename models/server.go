@@ -27,6 +27,7 @@ type ServerStatus string
 // Server statuses describe monitoring availability.
 const (
 	ServerStatusActive   ServerStatus = "active"
+	ServerStatusDegraded ServerStatus = "degraded"
 	ServerStatusInactive ServerStatus = "inactive"
 	ServerStatusError    ServerStatus = "error"
 )

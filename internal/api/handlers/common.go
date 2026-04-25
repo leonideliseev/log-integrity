@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
+	jobqueue "github.com/lenchik/logmonitor/internal/jobs"
 	"github.com/lenchik/logmonitor/internal/repository"
 )
 
@@ -24,6 +26,18 @@ func writeServiceError(c *gin.Context, err error) {
 		writeError(c, http.StatusNotFound, err.Error())
 	case errors.Is(err, repository.ErrConflict):
 		writeError(c, http.StatusConflict, err.Error())
+	default:
+		writeError(c, http.StatusInternalServerError, err.Error())
+	}
+}
+
+// writeJobError maps async queue errors to HTTP status codes.
+func writeJobError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, jobqueue.ErrNotFound):
+		writeError(c, http.StatusNotFound, err.Error())
+	case errors.Is(err, jobqueue.ErrQueueFull), errors.Is(err, jobqueue.ErrShuttingDown):
+		writeError(c, http.StatusServiceUnavailable, err.Error())
 	default:
 		writeError(c, http.StatusInternalServerError, err.Error())
 	}
@@ -54,4 +68,9 @@ func validatePageLimit(limit int) error {
 		return fmt.Errorf("limit must be less than or equal to %d", maxPageLimit)
 	}
 	return nil
+}
+
+// idempotencyKeyFromHeader extracts an optional client-supplied deduplication key.
+func idempotencyKeyFromHeader(c *gin.Context) string {
+	return strings.TrimSpace(c.GetHeader("X-Idempotency-Key"))
 }

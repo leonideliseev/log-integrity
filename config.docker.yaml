@@ -43,6 +43,14 @@ health:
   backoff_max_seconds: ${HEALTH_BACKOFF_MAX_SECONDS:-900}
   last_error_max_length: ${HEALTH_LAST_ERROR_MAX_LENGTH:-2048}
 
+jobs:
+  workers: ${JOBS_WORKERS:-2}
+  queue_size: ${JOBS_QUEUE_SIZE:-128}
+  history_limit: ${JOBS_HISTORY_LIMIT:-1000}
+
+runtime:
+  dry_run: ${RUNTIME_DRY_RUN:-false}
+
 workers:
   discovery_servers: ${WORKERS_DISCOVERY_SERVERS:-4}
   collection_servers: ${WORKERS_COLLECTION_SERVERS:-4}

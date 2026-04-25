@@ -1,12 +1,16 @@
 package handlers
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	jobqueue "github.com/lenchik/logmonitor/internal/jobs"
+	"github.com/lenchik/logmonitor/internal/repository"
 	serverservice "github.com/lenchik/logmonitor/internal/service/server"
 	"github.com/lenchik/logmonitor/models"
 )
@@ -14,6 +18,7 @@ import (
 // ServerHandler handles HTTP requests related to monitored servers.
 type ServerHandler struct {
 	service *serverservice.Service
+	jobs    *jobqueue.Manager
 }
 
 // createServerRequest describes the payload used to register a new monitored server.
@@ -77,8 +82,8 @@ type serverPayload struct {
 }
 
 // NewServerHandler creates a server handler with required dependencies.
-func NewServerHandler(service *serverservice.Service) *ServerHandler {
-	return &ServerHandler{service: service}
+func NewServerHandler(service *serverservice.Service, jobs *jobqueue.Manager) *ServerHandler {
+	return &ServerHandler{service: service, jobs: jobs}
 }
 
 // List returns all registered servers.
@@ -89,6 +94,26 @@ func (h *ServerHandler) List(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, serverResponses(items))
+}
+
+// Dashboard returns aggregated counters for future UI screens.
+func (h *ServerHandler) Dashboard(c *gin.Context) {
+	dashboard, err := h.service.Dashboard(c.Request.Context())
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, newDashboardResponse(dashboard))
+}
+
+// ListProblems returns aggregated operational issues across servers and log files.
+func (h *ServerHandler) ListProblems(c *gin.Context) {
+	items, err := h.service.ListProblems(c.Request.Context())
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, systemProblemResponses(items))
 }
 
 // Get returns one registered server by identifier.
@@ -124,6 +149,21 @@ func (h *ServerHandler) Create(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusCreated, newServerResponse(serverModel))
+}
+
+// Retry clears temporary failure state so operators can retry a server immediately.
+func (h *ServerHandler) Retry(c *gin.Context) {
+	serverID, ok := serverIDFromPath(c)
+	if !ok {
+		return
+	}
+
+	serverModel, err := h.service.Retry(c.Request.Context(), serverID)
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, newServerResponse(serverModel))
 }
 
 // Update overwrites one API-managed server from JSON payload.
@@ -165,6 +205,10 @@ func (h *ServerHandler) Delete(c *gin.Context) {
 	}
 
 	if err := h.service.Delete(c.Request.Context(), serverID); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			c.Status(http.StatusNoContent)
+			return
+		}
 		writeServiceError(c, err)
 		return
 	}
@@ -184,13 +228,36 @@ func (h *ServerHandler) Discover(c *gin.Context) {
 			return
 		}
 	}
+	payload.ServerID = strings.TrimSpace(payload.ServerID)
 
-	items, err := h.service.Discover(c.Request.Context(), payload.ServerID)
+	job, _, err := h.jobs.Submit(jobqueue.TaskSpec{
+		Type:           models.JobTypeDiscover,
+		IdempotencyKey: idempotencyKeyFromHeader(c),
+		Fingerprint:    discoverFingerprint(payload.ServerID),
+		ServerID:       payload.ServerID,
+		Run: func(ctx context.Context) (any, error) {
+			items, err := h.service.Discover(ctx, payload.ServerID)
+			if err != nil {
+				return nil, err
+			}
+			return discoverResultResponses(items), nil
+		},
+	})
 	if err != nil {
-		writeServiceError(c, err)
+		writeJobError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, discoverResultResponses(items))
+
+	c.Header("Location", "/api/jobs/"+job.ID)
+	c.JSON(http.StatusAccepted, newJobResponse(job))
+}
+
+// discoverFingerprint keeps repeated manual discovery requests idempotent while a job is queued or running.
+func discoverFingerprint(serverID string) string {
+	if serverID == "" {
+		return "discover:all"
+	}
+	return "discover:" + serverID
 }
 
 // toModel validates and converts a create payload to a domain model.

@@ -76,9 +76,13 @@ func (s *Service) Collect(ctx context.Context, serverID, logFileID string) (map[
 	if err != nil {
 		return nil, err
 	}
+	if len(logFiles) == 0 {
+		return map[string]CollectResult{}, nil
+	}
 
 	result := make(map[string]CollectResult, len(logFiles))
-	success := true
+	successCount := 0
+	failureCount := 0
 	var firstErr error
 	for _, logFile := range logFiles {
 		count, collectErr := s.collector.CollectLogFile(ctx, serverModel, logFile)
@@ -86,17 +90,21 @@ func (s *Service) Collect(ctx context.Context, serverID, logFileID string) (map[
 			if firstErr == nil {
 				firstErr = collectErr
 			}
-			success = false
+			failureCount++
 			result[logFile.ID] = CollectResult{Error: collectErr.Error()}
 			continue
 		}
+		successCount++
 		result[logFile.ID] = CollectResult{CollectedEntries: count}
 	}
 
-	if success {
+	switch {
+	case failureCount == 0:
 		_ = s.health.RecordSuccess(ctx, serverModel.ID)
-	} else {
+	case successCount == 0:
 		_ = s.health.RecordFailure(ctx, serverModel, firstErr)
+	default:
+		_ = s.health.RecordDegraded(ctx, serverModel.ID, fmt.Sprintf("collection partially failed for %d of %d log files", failureCount, len(logFiles)))
 	}
 
 	return result, nil
