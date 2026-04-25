@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/lenchik/logmonitor/internal/app"
+	generalapp "github.com/lenchik/logmonitor/internal/app/general"
 	"github.com/spf13/cobra"
 )
 
@@ -19,7 +19,7 @@ func (a *Application) newDiscoverCommand() *cobra.Command {
 		Example: "logmonitor discover\n" +
 			"logmonitor discover --server-id srv_123",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return a.withRuntime(cmd, func(ctx context.Context, runtime *app.Runtime) error {
+			return a.withRuntime(cmd, func(ctx context.Context, runtime *generalapp.Runtime) error {
 				items, err := runtime.ServerService.Discover(ctx, serverID)
 				if err != nil {
 					return err
@@ -52,7 +52,7 @@ func (a *Application) newLogFileListCommand() *cobra.Command {
 		Use:   "list",
 		Short: "List log files",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return a.withRuntime(cmd, func(ctx context.Context, runtime *app.Runtime) error {
+			return a.withRuntime(cmd, func(ctx context.Context, runtime *generalapp.Runtime) error {
 				items, err := runtime.LogFileService.List(ctx, serverID)
 				if err != nil {
 					return err
@@ -82,7 +82,7 @@ func (a *Application) newCollectCommand() *cobra.Command {
 				return fmt.Errorf("cli: --server-id is required")
 			}
 
-			return a.withRuntime(cmd, func(ctx context.Context, runtime *app.Runtime) error {
+			return a.withRuntime(cmd, func(ctx context.Context, runtime *generalapp.Runtime) error {
 				items, err := runtime.LogFileService.Collect(ctx, serverID, logFileID)
 				if err != nil {
 					return err
@@ -124,7 +124,7 @@ func (a *Application) newEntryListCommand() *cobra.Command {
 				return fmt.Errorf("cli: --log-file-id is required")
 			}
 
-			return a.withRuntime(cmd, func(ctx context.Context, runtime *app.Runtime) error {
+			return a.withRuntime(cmd, func(ctx context.Context, runtime *generalapp.Runtime) error {
 				items, err := runtime.EntryService.List(ctx, logFileID, offset, limit)
 				if err != nil {
 					return err
@@ -170,7 +170,7 @@ func (a *Application) newCheckListCommand() *cobra.Command {
 				return fmt.Errorf("cli: --log-file-id is required")
 			}
 
-			return a.withRuntime(cmd, func(ctx context.Context, runtime *app.Runtime) error {
+			return a.withRuntime(cmd, func(ctx context.Context, runtime *generalapp.Runtime) error {
 				items, err := runtime.CheckService.List(ctx, logFileID, offset, limit)
 				if err != nil {
 					return err
@@ -203,7 +203,7 @@ func (a *Application) newCheckRunCommand() *cobra.Command {
 				return fmt.Errorf("cli: --server-id is required")
 			}
 
-			return a.withRuntime(cmd, func(ctx context.Context, runtime *app.Runtime) error {
+			return a.withRuntime(cmd, func(ctx context.Context, runtime *generalapp.Runtime) error {
 				items, err := runtime.CheckService.Run(ctx, serverID, logFileID)
 				if err != nil {
 					return err
@@ -236,7 +236,7 @@ func (a *Application) newProblemListCommand() *cobra.Command {
 		Use:   "list",
 		Short: "List aggregated problems",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return a.withRuntime(cmd, func(ctx context.Context, runtime *app.Runtime) error {
+			return a.withRuntime(cmd, func(ctx context.Context, runtime *generalapp.Runtime) error {
 				items, err := runtime.ServerService.ListProblems(ctx)
 				if err != nil {
 					return err
@@ -253,7 +253,7 @@ func (a *Application) newDashboardCommand() *cobra.Command {
 		Use:   "dashboard",
 		Short: "Show dashboard summary",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return a.withRuntime(cmd, func(ctx context.Context, runtime *app.Runtime) error {
+			return a.withRuntime(cmd, func(ctx context.Context, runtime *generalapp.Runtime) error {
 				item, err := runtime.ServerService.Dashboard(ctx)
 				if err != nil {
 					return err
@@ -281,7 +281,7 @@ func (a *Application) newRuntimeValidationCommand() *cobra.Command {
 		Use:   "validation",
 		Short: "Show runtime validation snapshot",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return a.withRuntime(cmd, func(_ context.Context, runtime *app.Runtime) error {
+			return a.withRuntime(cmd, func(_ context.Context, runtime *generalapp.Runtime) error {
 				return a.printRuntimeSnapshot(runtime.RuntimeState.Snapshot())
 			})
 		},

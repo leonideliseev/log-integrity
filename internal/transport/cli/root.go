@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/lenchik/logmonitor/config"
-	"github.com/lenchik/logmonitor/internal/app"
+	cliapp "github.com/lenchik/logmonitor/internal/app/cli"
+	generalapp "github.com/lenchik/logmonitor/internal/app/general"
 	"github.com/spf13/cobra"
 )
 
@@ -40,7 +40,6 @@ func NewRootCommand() *cobra.Command {
 	root.PersistentFlags().StringVarP(&application.output, "output", "o", outputTable, "Output format: table or json")
 
 	root.AddCommand(
-		application.newServeCommand(),
 		application.newHealthCommand(),
 		application.newReadyCommand(),
 		application.newConfigCommand(),
@@ -59,21 +58,16 @@ func NewRootCommand() *cobra.Command {
 }
 
 // withRuntime loads config, builds shared services and closes resources after one command finishes.
-func (a *Application) withRuntime(cmd *cobra.Command, run func(context.Context, *app.Runtime) error) error {
+func (a *Application) withRuntime(cmd *cobra.Command, run func(context.Context, *generalapp.Runtime) error) error {
 	if err := a.validateOutput(); err != nil {
 		return err
 	}
 	a.stdout = cmd.OutOrStdout()
 	a.stderr = cmd.ErrOrStderr()
 
-	cfg, err := config.LoadRuntime(a.configPath)
+	runtime, err := cliapp.NewRuntimeFromPath(a.configPath)
 	if err != nil {
-		return fmt.Errorf("cli: load config: %w", err)
-	}
-
-	runtime, err := app.NewRuntime(cfg)
-	if err != nil {
-		return fmt.Errorf("cli: build runtime: %w", err)
+		return fmt.Errorf("cli: initialize runtime: %w", err)
 	}
 	defer func() {
 		_ = runtime.Close()

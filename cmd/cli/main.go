@@ -9,10 +9,16 @@ import (
 	"syscall"
 
 	clitransport "github.com/lenchik/logmonitor/internal/transport/cli"
+	"github.com/lenchik/logmonitor/pkg/appmode"
 )
 
 // main executes the CLI root command until completion or signal cancellation.
 func main() {
+	if _, err := appmode.Require(appmode.CLI); err != nil {
+		_, _ = fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 

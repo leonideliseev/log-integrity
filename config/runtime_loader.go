@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/lenchik/logmonitor/internal/runtimeinfo"
+	"github.com/lenchik/logmonitor/pkg/appmode"
 	"gopkg.in/yaml.v3"
 )
 
@@ -15,6 +16,11 @@ var envPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)(:-([^}]*))?}`)
 
 // LoadRuntime loads the runtime YAML configuration and applies defaults.
 func LoadRuntime(path string) (*Config, error) {
+	return LoadRuntimeForMode(path, appmode.HTTP)
+}
+
+// LoadRuntimeForMode loads the runtime YAML configuration for one startup mode and applies mode-aware defaults.
+func LoadRuntimeForMode(path string, mode appmode.Mode) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("config: read %q: %w", path, err)
@@ -28,8 +34,8 @@ func LoadRuntime(path string) (*Config, error) {
 	}
 	cfg.EnvChecks = envChecks
 
-	applyRuntimeDefaults(cfg)
-	if err := validateRuntime(cfg); err != nil {
+	applyRuntimeDefaults(cfg, mode)
+	if err := validateRuntime(cfg, mode); err != nil {
 		return nil, fmt.Errorf("config: validate: %w", err)
 	}
 
@@ -84,12 +90,14 @@ func expandEnvDefaults(value string) (string, []runtimeinfo.EnvCheck) {
 }
 
 // applyRuntimeDefaults fills optional config fields with fallback values.
-func applyRuntimeDefaults(cfg *Config) {
-	if cfg.Server.Host == "" {
-		cfg.Server.Host = "0.0.0.0"
-	}
-	if cfg.Server.Port == 0 {
-		cfg.Server.Port = 8080
+func applyRuntimeDefaults(cfg *Config, mode appmode.Mode) {
+	if mode == appmode.HTTP {
+		if cfg.Server.Host == "" {
+			cfg.Server.Host = "0.0.0.0"
+		}
+		if cfg.Server.Port == 0 {
+			cfg.Server.Port = 8080
+		}
 	}
 	if cfg.Database.Port == 0 {
 		cfg.Database.Port = 5432
@@ -184,7 +192,10 @@ func applyRuntimeDefaults(cfg *Config) {
 }
 
 // validateRuntime validates only the fields required for the current runtime mode.
-func validateRuntime(cfg *Config) error {
+func validateRuntime(cfg *Config, mode appmode.Mode) error {
+	if mode == appmode.HTTP && cfg.Server.Port < 0 {
+		return fmt.Errorf("server.port must be greater than or equal to zero")
+	}
 	if cfg.Database.MaxConns < 0 {
 		return fmt.Errorf("database.max_conns must be greater than or equal to zero")
 	}

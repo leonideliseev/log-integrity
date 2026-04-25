@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/lenchik/logmonitor/internal/app"
+	generalapp "github.com/lenchik/logmonitor/internal/app/general"
 	"github.com/lenchik/logmonitor/models"
 	"github.com/spf13/cobra"
 )
@@ -34,7 +34,7 @@ func (a *Application) newServerListCommand() *cobra.Command {
 		Use:   "list",
 		Short: "List monitored servers",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return a.withRuntime(cmd, func(ctx context.Context, runtime *app.Runtime) error {
+			return a.withRuntime(cmd, func(ctx context.Context, runtime *generalapp.Runtime) error {
 				items, err := runtime.ServerService.List(ctx)
 				if err != nil {
 					return err
@@ -52,7 +52,7 @@ func (a *Application) newServerGetCommand() *cobra.Command {
 		Short: "Show one monitored server",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return a.withRuntime(cmd, func(ctx context.Context, runtime *app.Runtime) error {
+			return a.withRuntime(cmd, func(ctx context.Context, runtime *generalapp.Runtime) error {
 				item, err := runtime.ServerService.Get(ctx, args[0])
 				if err != nil {
 					return err
@@ -76,7 +76,7 @@ func (a *Application) newServerAddCommand() *cobra.Command {
 				return err
 			}
 
-			return a.withRuntime(cmd, func(ctx context.Context, runtime *app.Runtime) error {
+			return a.withRuntime(cmd, func(ctx context.Context, runtime *generalapp.Runtime) error {
 				serverModel := attrs.toModel("")
 				if err := runtime.ServerService.Create(ctx, serverModel); err != nil {
 					return err
@@ -101,7 +101,7 @@ func (a *Application) newServerUpdateCommand() *cobra.Command {
 			"logmonitor server update srv_123 --status inactive",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return a.withRuntime(cmd, func(ctx context.Context, runtime *app.Runtime) error {
+			return a.withRuntime(cmd, func(ctx context.Context, runtime *generalapp.Runtime) error {
 				current, err := runtime.ServerService.Get(ctx, args[0])
 				if err != nil {
 					return err
@@ -138,7 +138,7 @@ func (a *Application) newServerDeleteCommand() *cobra.Command {
 		Example: "logmonitor server delete srv_123",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return a.withRuntime(cmd, func(ctx context.Context, runtime *app.Runtime) error {
+			return a.withRuntime(cmd, func(ctx context.Context, runtime *generalapp.Runtime) error {
 				if err := runtime.ServerService.Delete(ctx, args[0]); err != nil {
 					return err
 				}
@@ -157,7 +157,7 @@ func (a *Application) newServerRetryCommand() *cobra.Command {
 		Example: "logmonitor server retry srv_123",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return a.withRuntime(cmd, func(ctx context.Context, runtime *app.Runtime) error {
+			return a.withRuntime(cmd, func(ctx context.Context, runtime *generalapp.Runtime) error {
 				item, err := runtime.ServerService.Retry(ctx, args[0])
 				if err != nil {
 					return err

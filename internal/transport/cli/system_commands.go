@@ -4,48 +4,19 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/lenchik/logmonitor/config"
-	"github.com/lenchik/logmonitor/internal/app"
+	generalapp "github.com/lenchik/logmonitor/internal/app/general"
 	"github.com/spf13/cobra"
 )
-
-// newServeCommand starts the full HTTP server from the CLI binary.
-func (a *Application) newServeCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:     "serve",
-		Short:   "Start the HTTP server",
-		Long:    "Starts the same application runtime as cmd/server, including HTTP transport, background jobs and graceful shutdown.",
-		Example: "logmonitor serve --config config.yaml",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			cfg, err := config.LoadRuntime(a.configPath)
-			if err != nil {
-				return fmt.Errorf("cli: load config: %w", err)
-			}
-
-			application, err := app.New(cfg)
-			if err != nil {
-				return fmt.Errorf("cli: create app: %w", err)
-			}
-
-			ctx := cmd.Context()
-			if ctx == nil {
-				ctx = context.Background()
-			}
-
-			return application.Run(ctx)
-		},
-	}
-}
 
 // newHealthCommand performs the same liveness check semantics as /healthz.
 func (a *Application) newHealthCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:     "health",
 		Short:   "Run a local liveness check",
-		Long:    "Builds the local runtime and returns the same success semantics as the HTTP /healthz probe.",
+		Long:    "Builds the standalone CLI runtime and returns a success response when the process can initialize correctly.",
 		Example: "logmonitor health\nlogmonitor health --output json",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return a.withRuntime(cmd, func(_ context.Context, _ *app.Runtime) error {
+			return a.withRuntime(cmd, func(_ context.Context, _ *generalapp.Runtime) error {
 				if a.output == outputJSON {
 					return printJSON(a.out(), map[string]string{"status": "ok"})
 				}
@@ -61,10 +32,10 @@ func (a *Application) newReadyCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:     "ready",
 		Short:   "Run a local readiness check",
-		Long:    "Builds the runtime and prints the same readiness payload that the HTTP /readyz probe would return.",
+		Long:    "Builds the standalone runtime and prints the shared readiness payload without HTTP-specific checks.",
 		Example: "logmonitor ready\nlogmonitor ready --output json",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return a.withRuntime(cmd, func(ctx context.Context, runtime *app.Runtime) error {
+			return a.withRuntime(cmd, func(ctx context.Context, runtime *generalapp.Runtime) error {
 				readiness := runtime.Readiness(ctx)
 				if !readiness.Ready {
 					if err := a.printReadiness(readiness); err != nil {
@@ -94,10 +65,10 @@ func (a *Application) newConfigValidateCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:     "validate",
 		Short:   "Validate config and show runtime warnings",
-		Long:    "Loads the selected config, applies environment resolution and prints the same validation snapshot exposed by the HTTP runtime endpoint.",
+		Long:    "Loads the selected CLI config, applies environment resolution and prints the runtime validation snapshot.",
 		Example: "logmonitor config validate\nlogmonitor config validate --output json",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return a.withRuntime(cmd, func(_ context.Context, runtime *app.Runtime) error {
+			return a.withRuntime(cmd, func(_ context.Context, runtime *generalapp.Runtime) error {
 				return a.printRuntimeSnapshot(runtime.RuntimeState.Snapshot())
 			})
 		},

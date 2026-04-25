@@ -1,17 +1,20 @@
-// Package app wires repositories, services, API handlers and background jobs.
-package app
+// Package general builds the shared application runtime used by both HTTP and CLI entrypoints.
+package general
 
 import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/lenchik/logmonitor/config"
 	"github.com/lenchik/logmonitor/crons/locks"
-	jobqueue "github.com/lenchik/logmonitor/internal/jobs"
 	"github.com/lenchik/logmonitor/internal/repository"
+	"github.com/lenchik/logmonitor/internal/repository/memory"
+	"github.com/lenchik/logmonitor/internal/repository/postgres"
 	"github.com/lenchik/logmonitor/internal/runtimeinfo"
+	"github.com/lenchik/logmonitor/internal/security"
 	checkappservice "github.com/lenchik/logmonitor/internal/service/check"
 	collectservice "github.com/lenchik/logmonitor/internal/service/collector"
 	discoveryservice "github.com/lenchik/logmonitor/internal/service/discovery"
@@ -30,7 +33,6 @@ type Runtime struct {
 	Config       *config.Config
 	Logger       *slog.Logger
 	Repo         repository.Repository
-	Jobs         *jobqueue.Manager
 	RuntimeState *runtimeinfo.State
 
 	ServerService  *serverappservice.Service
@@ -98,7 +100,6 @@ func NewRuntime(cfg *config.Config) (*Runtime, error) {
 		Config:       cfg,
 		Logger:       log,
 		Repo:         store,
-		Jobs:         jobqueue.NewManager(log, jobqueue.Options{Workers: cfg.Jobs.Workers, QueueSize: cfg.Jobs.QueueSize, HistoryLimit: cfg.Jobs.HistoryLimit}),
 		RuntimeState: runtimeState,
 		discovery:    discoveryService,
 		collector:    collectorService,
@@ -136,9 +137,67 @@ func (r *Runtime) SetSchedulerEnabled(enabled bool) {
 	r.RuntimeState.SetSchedulerEnabled(enabled)
 }
 
-// Readiness returns the current readiness snapshot for transports and CLI commands.
+// Readiness returns core readiness checks shared by all startup modes.
 func (r *Runtime) Readiness(ctx context.Context) runtimeinfo.Readiness {
-	return r.readiness(ctx)
+	checks := make([]runtimeinfo.Check, 0, 2)
+
+	if err := r.Repo.Ping(ctx); err != nil {
+		checks = append(checks, runtimeinfo.Check{
+			Name:    "repository",
+			Ready:   false,
+			Message: err.Error(),
+		})
+	} else {
+		checks = append(checks, runtimeinfo.Check{
+			Name:    "repository",
+			Ready:   true,
+			Message: "repository is reachable",
+		})
+	}
+
+	checks = append(checks, runtimeinfo.Check{
+		Name:    "services",
+		Ready:   true,
+		Message: "core services are initialized",
+	})
+
+	ready := true
+	for _, check := range checks {
+		if !check.Ready {
+			ready = false
+			break
+		}
+	}
+
+	return runtimeinfo.Readiness{
+		Ready:  ready,
+		Checks: checks,
+	}
+}
+
+// DiscoveryService exposes the shared discovery implementation to server-only orchestration.
+func (r *Runtime) DiscoveryService() *discoveryservice.Service {
+	return r.discovery
+}
+
+// CollectorService exposes the shared collector implementation to server-only orchestration.
+func (r *Runtime) CollectorService() *collectservice.Service {
+	return r.collector
+}
+
+// IntegrityService exposes the shared integrity implementation to server-only orchestration.
+func (r *Runtime) IntegrityService() *integrityservice.Service {
+	return r.integrity
+}
+
+// HealthService exposes the shared health implementation to server-only orchestration.
+func (r *Runtime) HealthService() *healthservice.Service {
+	return r.health
+}
+
+// LockManager exposes the shared isolation manager to server-only orchestration.
+func (r *Runtime) LockManager() *locks.Manager {
+	return r.locks
 }
 
 // seedServers imports server definitions from config into the repository.
@@ -193,59 +252,87 @@ func (r *Runtime) seedServers(ctx context.Context) error {
 	return nil
 }
 
-// readiness reports whether the process is ready to serve traffic and background tasks.
-func (r *Runtime) readiness(ctx context.Context) runtimeinfo.Readiness {
-	checks := make([]runtimeinfo.Check, 0, 4)
+// buildLockManager creates shared cron isolation locks when enabled in config.
+func buildLockManager(cfg *config.Config) *locks.Manager {
+	if cfg.Workers.PerServerIsolation == nil || !*cfg.Workers.PerServerIsolation {
+		return nil
+	}
+	return locks.NewManager()
+}
 
-	if err := r.Repo.Ping(ctx); err != nil {
-		checks = append(checks, runtimeinfo.Check{
-			Name:    "repository",
-			Ready:   false,
-			Message: err.Error(),
-		})
-	} else {
-		checks = append(checks, runtimeinfo.Check{
-			Name:    "repository",
-			Ready:   true,
-			Message: "repository is reachable",
-		})
+// buildRepository selects PostgreSQL when database settings are provided and falls back to memory otherwise.
+func buildRepository(cfg *config.Config) (repository.Repository, string, error) {
+	if cfg.Runtime.DryRun {
+		return memory.New(), "memory", nil
+	}
+	if cfg.Database.Host == "" || cfg.Database.User == "" || cfg.Database.DBName == "" {
+		return memory.New(), "memory", nil
 	}
 
-	checks = append(checks, runtimeinfo.Check{
-		Name:    "api",
-		Ready:   true,
-		Message: "http api is initialized",
-	})
-	checks = append(checks, runtimeinfo.Check{
-		Name:    "jobs",
-		Ready:   true,
-		Message: "async job queue is configured",
-	})
-
-	if r.Config.Runtime.DryRun {
-		checks = append(checks, runtimeinfo.Check{
-			Name:    "scheduler",
-			Ready:   true,
-			Message: "scheduler is intentionally disabled in dry-run mode",
-		})
-	} else {
-		checks = append(checks, runtimeinfo.Check{
-			Name:    "scheduler",
-			Ready:   true,
-			Message: "scheduler is configured",
-		})
+	authCipher, err := security.NewStringCipher(cfg.Security.AuthValueEncryptionKey)
+	if err != nil {
+		return nil, "", fmt.Errorf("app: create auth value cipher: %w", err)
 	}
 
-	ready := true
-	for _, check := range checks {
-		if !check.Ready {
-			ready = false
-			break
+	store, err := postgres.OpenWithOptions(cfg.Database.DSN(), postgres.Options{
+		MaxConns:      cfg.Database.MaxConns,
+		MinConns:      cfg.Database.MinConns,
+		MigrationsDir: cfg.Database.MigrationsDir,
+		AuthCipher:    authCipher,
+	})
+	if err != nil {
+		return nil, "", fmt.Errorf("app: open postgres repository: %w", err)
+	}
+
+	return store, "postgres", nil
+}
+
+// serverModelFromConfig converts a configured server into a repository model.
+func serverModelFromConfig(item config.ServerEntry) *models.Server {
+	serverModel := &models.Server{
+		Name:      item.Name,
+		Host:      item.Host,
+		Port:      item.Port,
+		Username:  item.Username,
+		AuthType:  models.AuthType(item.AuthType),
+		AuthValue: item.AuthValue,
+		OSType:    models.OSType(item.OSType),
+		Status:    models.ServerStatusActive,
+		ManagedBy: models.ServerManagedByConfig,
+	}
+	if serverModel.Port == 0 {
+		serverModel.Port = 22
+	}
+	return serverModel
+}
+
+// isConfigManagedServer reports whether the config bootstrap is allowed to update a server.
+func isConfigManagedServer(serverModel *models.Server) bool {
+	return serverModel.ManagedBy == "" || serverModel.ManagedBy == models.ServerManagedByConfig
+}
+
+// replaceServer keeps the local seed snapshot aligned after an upsert.
+func replaceServer(servers []*models.Server, replacement *models.Server) []*models.Server {
+	for index, item := range servers {
+		if item.ID == replacement.ID {
+			servers[index] = replacement
+			return servers
 		}
 	}
+	return append(servers, replacement)
+}
 
-	return runtimeinfo.Readiness{
-		Ready:  ready,
-		Checks: checks,
+// findServerByNameOrHost returns an existing server with the same configured identity.
+func findServerByNameOrHost(servers []*models.Server, name, host string) *models.Server {
+	for _, item := range servers {
+		if strings.EqualFold(item.Name, name) || strings.EqualFold(item.Host, host) {
+			return item
+		}
 	}
+	return nil
+}
+
+// databaseConfigured reports whether PostgreSQL settings are present enough to attempt a real connection.
+func databaseConfigured(cfg *config.Config) bool {
+	return cfg.Database.Host != "" && cfg.Database.User != "" && cfg.Database.DBName != ""
 }

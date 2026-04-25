@@ -10,7 +10,8 @@ import (
 	"syscall"
 
 	"github.com/lenchik/logmonitor/config"
-	"github.com/lenchik/logmonitor/internal/app"
+	httpapp "github.com/lenchik/logmonitor/internal/app/http"
+	"github.com/lenchik/logmonitor/pkg/appmode"
 )
 
 // main loads config, builds the application and runs it until shutdown signal arrives.
@@ -18,12 +19,16 @@ func main() {
 	configPath := flag.String("config", "config.yaml", "Path to YAML config")
 	flag.Parse()
 
-	cfg, err := config.LoadRuntime(*configPath)
+	if _, err := appmode.Require(appmode.HTTP); err != nil {
+		log.Fatalf("startup mode: %v", err)
+	}
+
+	cfg, err := config.LoadRuntimeForMode(*configPath, appmode.HTTP)
 	if err != nil {
 		log.Fatalf("load config: %v", err)
 	}
 
-	application, err := app.New(cfg)
+	application, err := httpapp.New(cfg)
 	if err != nil {
 		log.Fatalf("create app: %v", err)
 	}
