@@ -273,8 +273,7 @@ func buildReadCommand(logFile *models.LogFile, afterLine int64) string {
 	}
 
 	if strings.HasPrefix(strings.ToLower(logFile.Path), "eventlog://") {
-		logName := logFile.Path[len("eventlog://"):]
-		return `powershell -NoProfile -Command "$events = Get-WinEvent -LogName '` + escapePowerShellSingleQuotes(logName) + `' -MaxEvents 200 -ErrorAction Stop | Where-Object { $_.RecordId -gt ` + strconv.FormatInt(afterLine, 10) + ` } | Sort-Object RecordId; foreach ($event in $events) { '{0}` + "`t" + `{1}' -f $event.RecordId, $event.Message }"`
+		return buildEventLogReadCommand(logFile.Path[len("eventlog://"):], afterLine)
 	}
 
 	if looksLikeWindowsPath(logFile.Path) {
@@ -283,6 +282,17 @@ func buildReadCommand(logFile *models.LogFile, afterLine int64) string {
 
 	escapedPath := escapeSingleQuotes(logFile.Path)
 	return "sh -lc \"p='" + escapedPath + "'; start=" + strconv.FormatInt(afterLine, 10) + "; if [ ! -f \\\"$p\\\" ]; then echo 'log file not found:' \\\"$p\\\" >&2; exit 1; fi; awk -v start=\\\"$start\\\" 'NR > start { print NR \\\"\\\\t\\\" $0 }' \\\"$p\\\"\""
+}
+
+// buildEventLogReadCommand reads Windows Event Log records without truncating history to a fixed window.
+func buildEventLogReadCommand(logName string, afterLine int64) string {
+	escapedLogName := escapePowerShellSingleQuotes(logName)
+	if afterLine <= 0 {
+		return `powershell -NoProfile -Command "$events = Get-WinEvent -LogName '` + escapedLogName + `' -Oldest -ErrorAction Stop; foreach ($event in $events) { '{0}` + "`t" + `{1}' -f $event.RecordId, $event.Message }"`
+	}
+
+	xpath := "*[System[(EventRecordID>" + strconv.FormatInt(afterLine, 10) + ")]]"
+	return `powershell -NoProfile -Command "$events = Get-WinEvent -LogName '` + escapedLogName + `' -FilterXPath '` + xpath + `' -Oldest -ErrorAction Stop; foreach ($event in $events) { '{0}` + "`t" + `{1}' -f $event.RecordId, $event.Message }"`
 }
 
 // buildIdentityCommand chooses the best-effort remote stat command for the log source type.
@@ -348,6 +358,11 @@ func shouldResetCollection(logFile *models.LogFile, current models.FileIdentity)
 	default:
 		return fileShrank(previous, current)
 	}
+}
+
+// RequiresRecollection reports whether the current source identity no longer matches the collected baseline.
+func RequiresRecollection(logFile *models.LogFile, current models.FileIdentity) bool {
+	return shouldResetCollection(logFile, current)
 }
 
 func hasIdentity(identity models.FileIdentity) bool {

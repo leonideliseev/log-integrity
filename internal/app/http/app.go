@@ -169,12 +169,20 @@ func (a *App) readiness(ctx context.Context) runtimeinfo.Readiness {
 			Ready:   true,
 			Message: "http api is initialized",
 		},
-		runtimeinfo.Check{
+	)
+	if a.jobs.Started() {
+		checks = append(checks, runtimeinfo.Check{
 			Name:    "jobs",
 			Ready:   true,
-			Message: "async job queue is configured",
-		},
-	)
+			Message: "async job queue workers are running",
+		})
+	} else {
+		checks = append(checks, runtimeinfo.Check{
+			Name:    "jobs",
+			Ready:   false,
+			Message: "async job queue workers are not running",
+		})
+	}
 
 	if a.cfg.Runtime.DryRun {
 		checks = append(checks, runtimeinfo.Check{
@@ -182,11 +190,17 @@ func (a *App) readiness(ctx context.Context) runtimeinfo.Readiness {
 			Ready:   true,
 			Message: "scheduler is intentionally disabled in dry-run mode",
 		})
-	} else {
+	} else if a.scheduler.Started() {
 		checks = append(checks, runtimeinfo.Check{
 			Name:    "scheduler",
 			Ready:   true,
-			Message: "scheduler is configured",
+			Message: "scheduler workers are running",
+		})
+	} else {
+		checks = append(checks, runtimeinfo.Check{
+			Name:    "scheduler",
+			Ready:   false,
+			Message: "scheduler workers are not running",
 		})
 	}
 

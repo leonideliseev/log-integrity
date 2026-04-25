@@ -82,6 +82,18 @@ func (s *Scheduler) Stop() {
 		cancel()
 	}
 	s.wg.Wait()
+
+	s.mu.Lock()
+	s.started = false
+	s.cancel = nil
+	s.mu.Unlock()
+}
+
+// Started reports whether the scheduler lifecycle has been started and not stopped yet.
+func (s *Scheduler) Started() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.started
 }
 
 // runJob executes one job immediately and then on every ticker interval.

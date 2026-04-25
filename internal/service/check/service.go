@@ -3,6 +3,7 @@ package check
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/lenchik/logmonitor/internal/repository"
@@ -93,6 +94,17 @@ func (s *Service) Run(ctx context.Context, serverID, logFileID string) (map[stri
 			}
 			failureCount++
 			result[logFile.ID] = RunResult{Error: checkErr.Error()}
+			continue
+		}
+		if checkResult != nil && checkResult.Status == models.CheckStatusError {
+			if firstErr == nil {
+				firstErr = errors.New(checkResult.ErrorMessage)
+			}
+			failureCount++
+			result[logFile.ID] = RunResult{
+				Result: checkResult,
+				Error:  checkResult.ErrorMessage,
+			}
 			continue
 		}
 		successCount++

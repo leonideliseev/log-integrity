@@ -213,7 +213,8 @@ func TestReadLogLinesAfterUsesWindowsEventRecordID(t *testing.T) {
 		t.WithNewStep("Verify generated command filters by RecordId", func(step provider.StepCtx) {
 			commands := factory.Commands()
 			step.Require().Len(commands, 1)
-			step.Require().Contains(commands[0], "RecordId -gt 100")
+			step.Require().Contains(commands[0], "EventRecordID>100")
+			step.Require().NotContains(commands[0], "-MaxEvents 200")
 		})
 	})
 }

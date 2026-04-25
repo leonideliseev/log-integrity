@@ -3,6 +3,7 @@ package integritycron
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -159,6 +160,16 @@ func (r *Runner) runLogFileWorkers(ctx context.Context, serverModel *models.Serv
 				summary.failureCount++
 				mu.Unlock()
 				r.logger.Error("integrity check", "server", serverModel.Name, "log_file", logFile.Path, "error", err)
+				return
+			}
+			if result != nil && result.Status == models.CheckStatusError {
+				mu.Lock()
+				if summary.firstErr == nil {
+					summary.firstErr = errors.New(result.ErrorMessage)
+				}
+				summary.failureCount++
+				mu.Unlock()
+				r.logger.Warn("integrity check returned error status", "server", serverModel.Name, "log_file", logFile.Path, "error", result.ErrorMessage)
 				return
 			}
 			mu.Lock()

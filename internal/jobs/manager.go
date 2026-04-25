@@ -104,8 +104,13 @@ func NewManager(logger *slog.Logger, opts Options) *Manager {
 // Start launches worker goroutines bound to the application lifetime context.
 func (m *Manager) Start(parentCtx context.Context) {
 	m.workerStartupOnce.Do(func() {
-		m.ctx, m.cancel = context.WithCancel(parentCtx)
+		ctx, cancel := context.WithCancel(parentCtx)
+		m.mu.Lock()
+		m.ctx = ctx
+		m.cancel = cancel
 		m.workersStarted = true
+		m.shuttingDown = false
+		m.mu.Unlock()
 
 		for index := 0; index < m.opts.Workers; index++ {
 			m.workerWaitGroup.Add(1)
@@ -135,10 +140,20 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 
 	select {
 	case <-done:
+		m.mu.Lock()
+		m.workersStarted = false
+		m.mu.Unlock()
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// Started reports whether the manager has active workers and is still accepting work.
+func (m *Manager) Started() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.workersStarted && !m.shuttingDown
 }
 
 // Submit enqueues a new job or reuses an existing one when idempotency rules match.

@@ -99,6 +99,53 @@ func TestIntegrityServiceCheckLogFileUsesChunksToNarrowTampering(t *testing.T) {
 	})
 }
 
+func TestIntegrityServiceCheckLogFileReturnsErrorWhenSourceIdentityChanged(t *testing.T) {
+	runner.Run(t, "integrity check stops on source identity change", func(t provider.T) {
+		t.Epic("Service layer")
+		t.Feature("Integrity")
+		t.Story("Log rotation")
+		t.Title("Does not report tampering when the log source identity no longer matches the collected baseline")
+
+		ctx := context.Background()
+		store, serverModel, logFile := prepareIntegrityRepository(t)
+		logFile.FileIdentity = models.FileIdentity{
+			DeviceID:    "dev",
+			Inode:       "old",
+			SizeBytes:   128,
+			ModTimeUnix: 10,
+		}
+		t.Require().NoError(store.UpdateLogFile(ctx, logFile))
+
+		factory := &testsupport.SSHClientFactory{Execute: func(cmd string) (string, error) {
+			switch {
+			case strings.Contains(cmd, "stat -c"):
+				return "device_id=dev\ninode=new\nsize_bytes=32\nmod_time_unix=20", nil
+			case strings.Contains(cmd, "awk"):
+				return "1\talpha changed\n2\tbeta changed", nil
+			default:
+				return "", nil
+			}
+		}}
+		service := integrityservice.NewService(factory, store, store)
+
+		t.WithNewStep("Run integrity check after the underlying file rotated", func(step provider.StepCtx) {
+			result, tampered, err := service.CheckLogFile(ctx, serverModel, logFile)
+			step.Require().NoError(err)
+			step.Require().Nil(tampered)
+			step.Require().Equal(models.CheckStatusError, result.Status)
+			step.Require().Contains(result.ErrorMessage, "run collection again before integrity check")
+		})
+
+		t.WithNewStep("Verify the latest persisted check result reflects baseline mismatch instead of tampering", func(step provider.StepCtx) {
+			results, err := store.ListCheckResults(ctx, logFile.ID, 0, 0)
+			step.Require().NoError(err)
+			step.Require().Len(results, 1)
+			step.Require().Equal(models.CheckStatusError, results[0].Status)
+			step.Require().Contains(results[0].ErrorMessage, "run collection again before integrity check")
+		})
+	})
+}
+
 func TestIntegrityServiceCheckLogFileRecordsConnectionError(t *testing.T) {
 	runner.Run(t, "integrity check records connection errors", func(t provider.T) {
 		t.Epic("Service layer")

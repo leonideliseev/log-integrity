@@ -52,26 +52,22 @@ func NewServiceWithOptions(clientFactory ssh.ClientFactory, entries repository.L
 func (s *Service) CheckLogFile(ctx context.Context, serverModel *models.Server, logFile *models.LogFile) (*models.CheckResult, []models.TamperedEntry, error) {
 	client := s.clientFactory.NewClient()
 	if err := client.Connect(serverModel); err != nil {
-		result := &models.CheckResult{
-			LogFileID:    logFile.ID,
-			Status:       models.CheckStatusError,
-			ErrorMessage: fmt.Sprintf("connect to %s: %v", serverModel.Name, err),
-		}
-		_ = s.checks.CreateCheckResult(ctx, result)
+		result := s.storeErrorResult(ctx, logFile.ID, fmt.Sprintf("connect to %s: %v", serverModel.Name, err))
 		return result, nil, fmt.Errorf("integrity: connect to %q: %w", serverModel.Name, err)
 	}
 	defer func() {
 		_ = client.Close()
 	}()
 
+	currentIdentity, _, identityErr := collectservice.InspectLogFileIdentity(ctx, client, serverModel, logFile)
+	if identityErr == nil && collectservice.RequiresRecollection(logFile, currentIdentity) {
+		message := fmt.Sprintf("log source %q changed identity since last collection; run collection again before integrity check", logFile.Path)
+		return s.storeErrorResult(ctx, logFile.ID, message), nil, nil
+	}
+
 	currentLines, err := collectservice.ReadLogLines(ctx, client, logFile)
 	if err != nil {
-		result := &models.CheckResult{
-			LogFileID:    logFile.ID,
-			Status:       models.CheckStatusError,
-			ErrorMessage: err.Error(),
-		}
-		_ = s.checks.CreateCheckResult(ctx, result)
+		result := s.storeErrorResult(ctx, logFile.ID, err.Error())
 		return result, nil, err
 	}
 
@@ -105,6 +101,17 @@ func (s *Service) CheckLogFile(ctx context.Context, serverModel *models.Server, 
 	}
 
 	return result, tampered, nil
+}
+
+// storeErrorResult persists one failed integrity check result and returns the stored model.
+func (s *Service) storeErrorResult(ctx context.Context, logFileID, message string) *models.CheckResult {
+	result := &models.CheckResult{
+		LogFileID:    logFileID,
+		Status:       models.CheckStatusError,
+		ErrorMessage: message,
+	}
+	_ = s.checks.CreateCheckResult(ctx, result)
+	return result
 }
 
 func (s *Service) findTamperedEntries(ctx context.Context, logFileID string, currentByLine map[int64]string) ([]models.TamperedEntry, error) {
