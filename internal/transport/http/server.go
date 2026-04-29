@@ -78,6 +78,10 @@ func NewServer(addr string, logger *slog.Logger, authToken string, serverService
 			Addr:              addr,
 			Handler:           engine,
 			ReadHeaderTimeout: 5 * time.Second,
+			ReadTimeout:       15 * time.Second,
+			WriteTimeout:      60 * time.Second,
+			IdleTimeout:       60 * time.Second,
+			MaxHeaderBytes:    1 << 20,
 		},
 	}
 }

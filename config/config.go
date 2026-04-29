@@ -29,7 +29,8 @@ type ServerConfig struct {
 
 // APIConfig stores HTTP API access settings.
 type APIConfig struct {
-	AuthToken string `yaml:"auth_token"`
+	AuthToken            string `yaml:"auth_token"`
+	AllowUnauthenticated bool   `yaml:"allow_unauthenticated"`
 }
 
 // SecurityConfig stores cryptographic keys for persisted secrets and log hashes.

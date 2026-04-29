@@ -334,6 +334,12 @@ func buildRuntimeState(cfg *config.Config) *runtimeinfo.State {
 	if cfg.Runtime.DryRun && databaseConfigured(cfg) {
 		runtimeState.AddWarning("dry-run-database-skipped", "database configuration was ignored because dry-run mode is enabled")
 	}
+	if cfg.API.AllowUnauthenticated {
+		runtimeState.AddWarning("api-unauthenticated", "HTTP API authentication is explicitly disabled")
+	}
+	if cfg.Collector.StoreRawContent != nil && *cfg.Collector.StoreRawContent {
+		runtimeState.AddWarning("raw-log-content-enabled", "raw log content is persisted and may contain sensitive data")
+	}
 	return runtimeState
 }
 

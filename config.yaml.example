@@ -4,7 +4,8 @@ server:
   port: 8080
 
 api:
-  auth_token: ""
+  auth_token: "change-me-api-auth-token"
+  allow_unauthenticated: false
 
 security:
   auth_value_encryption_key: "change-me-auth-value-encryption-key"
@@ -35,7 +36,7 @@ scheduler:
 collector:
   batch_size: 5000
   chunk_size: 1000
-  store_raw_content: true
+  store_raw_content: false
   chunk_hash_algo: "sha256"
 
 health:

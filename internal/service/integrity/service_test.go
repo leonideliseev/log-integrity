@@ -99,6 +99,60 @@ func TestIntegrityServiceCheckLogFileUsesChunksToNarrowTampering(t *testing.T) {
 	})
 }
 
+func TestIntegrityServiceCheckLogFileChecksEntriesOutsideChunkCoverage(t *testing.T) {
+	runner.Run(t, "integrity check verifies entries outside chunk coverage", func(t provider.T) {
+		t.Epic("Service layer")
+		t.Feature("Integrity")
+		t.Story("Chunk coverage")
+		t.Title("Falls back to stored entries that are not covered by aggregate chunks")
+
+		ctx := context.Background()
+		store, serverModel, logFile := prepareIntegrityRepository(t)
+		t.Require().NoError(store.CreateLogChunks(ctx, []*models.LogChunk{
+			{LogFileID: logFile.ID, ChunkNumber: 0, FromLineNumber: 1, ToLineNumber: 1, EntriesCount: 1, Hash: chunkHash("alpha"), HashAlgorithm: "sha256"},
+		}))
+
+		factory := &testsupport.SSHClientFactory{Execute: integrityReadHandler("1\talpha\n2\tbeta changed")}
+		service := integrityservice.NewServiceWithChunks(factory, store, store, store)
+
+		t.WithNewStep("Run integrity check with a missing chunk for line two", func(step provider.StepCtx) {
+			result, tampered, err := service.CheckLogFile(ctx, serverModel, logFile)
+			step.Require().NoError(err)
+			step.Require().Equal(models.CheckStatusTampered, result.Status)
+			step.Require().EqualValues(1, result.TamperedLines)
+			step.Require().Len(tampered, 1)
+			step.Require().EqualValues(2, tampered[0].LineNumber)
+		})
+	})
+}
+
+func TestIntegrityServiceCheckLogFileHandlesSparseChunkLineNumbers(t *testing.T) {
+	runner.Run(t, "integrity check handles sparse chunk line numbers", func(t provider.T) {
+		t.Epic("Service layer")
+		t.Feature("Integrity")
+		t.Story("Chunk comparison")
+		t.Title("Hashes chunk entries by stored line numbers instead of assuming contiguous ranges")
+
+		ctx := context.Background()
+		store, serverModel, logFile := prepareIntegrityRepository(t)
+		t.Require().NoError(store.CreateLogEntry(ctx, &models.LogEntry{LogFileID: logFile.ID, LineNumber: 10, Content: "omega", Hash: hasher.SHA256String("omega")}))
+		t.Require().NoError(store.CreateLogChunks(ctx, []*models.LogChunk{
+			{LogFileID: logFile.ID, ChunkNumber: 0, FromLineNumber: 1, ToLineNumber: 10, EntriesCount: 3, Hash: chunkHash("alpha", "beta", "omega"), HashAlgorithm: "sha256"},
+		}))
+
+		factory := &testsupport.SSHClientFactory{Execute: integrityReadHandler("1\talpha\n2\tbeta\n10\tomega")}
+		service := integrityservice.NewServiceWithChunks(factory, store, store, store)
+
+		t.WithNewStep("Run integrity check against sparse but unchanged line numbers", func(step provider.StepCtx) {
+			result, tampered, err := service.CheckLogFile(ctx, serverModel, logFile)
+			step.Require().NoError(err)
+			step.Require().Equal(models.CheckStatusOK, result.Status)
+			step.Require().EqualValues(3, result.TotalLines)
+			step.Require().Empty(tampered)
+		})
+	})
+}
+
 func TestIntegrityServiceCheckLogFileReturnsErrorWhenSourceIdentityChanged(t *testing.T) {
 	runner.Run(t, "integrity check stops on source identity change", func(t provider.T) {
 		t.Epic("Service layer")

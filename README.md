@@ -98,6 +98,8 @@ LOGMONITOR_APP_MODE=HTTP go run ./cmd/server -config config.local.yaml
 - `http://localhost:8080/readyz`
 - `http://localhost:8080/swagger`
 
+`config.local.yaml` явно включает `api.allow_unauthenticated: true`, поэтому локальный API стартует без токена. Для production используйте отдельный конфиг с заданным `api.auth_token`.
+
 ### 3. Локальный запуск CLI
 
 PowerShell:
@@ -124,6 +126,7 @@ go run ./cmd/cli --config config.local.yaml dashboard
 
 - данные не сохраняются между перезапусками;
 - история job и runtime-состояние тоже теряются;
+- HTTP API в локальном конфиге намеренно доступен без авторизации;
 - это не production-режим.
 
 Если нужен постоянный storage, заполните секцию `database` и задайте ключ `security.auth_value_encryption_key`.
@@ -135,7 +138,7 @@ go run ./cmd/cli --config config.local.yaml dashboard
 | Секция | Назначение | Обязательна |
 | --- | --- | --- |
 | `server` | Хост и порт HTTP-сервера | Только для `HTTP` |
-| `api` | Токен авторизации для API | Только для `HTTP` |
+| `api` | Авторизация HTTP API и явное отключение auth для dev-режима | Только для `HTTP` |
 | `security` | Ключи шифрования и HMAC | Да |
 | `database` | Подключение к PostgreSQL | Нет, если устраивает in-memory |
 | `ssh` | Таймауты и политика host key | Да |
@@ -190,9 +193,10 @@ servers:
 | --- | --- | --- | --- |
 | `APP_HOST` | Хост HTTP-сервера | Нет | `0.0.0.0` |
 | `APP_PORT` | Порт HTTP-сервера | Нет | `8080` |
-| `API_AUTH_TOKEN` | API-токен для `X-API-Key` или `Authorization: Bearer` | Нет, но рекомендуется | `super-secret-token` |
+| `API_AUTH_TOKEN` | API-токен для `X-API-Key` или `Authorization: Bearer` | Да, если auth не отключён явно | `change-me-api-auth-token` |
+| `API_ALLOW_UNAUTHENTICATED` | Разрешить HTTP API без токена | Только для локальной разработки | `false` |
 
-> Если `API_AUTH_TOKEN` пустой, API будет доступен без авторизации. Для production так делать не стоит.
+> В HTTP-режиме пустой `API_AUTH_TOKEN` считается ошибкой, если `API_ALLOW_UNAUTHENTICATED` не установлен в `true`.
 
 ### Безопасность
 
@@ -240,7 +244,7 @@ servers:
 | `INTEGRITY_CRON` | Расписание integrity check | `0 * * * *` |
 | `COLLECTOR_BATCH_SIZE` | Batch size при вставке логов | `5000` |
 | `COLLECTOR_CHUNK_SIZE` | Размер чанка для групповых hash/HMAC-операций | `1000` |
-| `COLLECTOR_STORE_RAW_CONTENT` | Сохранять текст строк лога | `true` |
+| `COLLECTOR_STORE_RAW_CONTENT` | Сохранять текст строк лога, который может содержать чувствительные данные | `false` |
 | `COLLECTOR_CHUNK_HASH_ALGO` | Алгоритм hash для чанков | `sha256` |
 | `HEALTH_FAILURE_THRESHOLD` | Порог ошибок до реакции health-layer | `1` |
 | `HEALTH_BACKOFF_BASE_SECONDS` | Базовый backoff | `60` |
@@ -329,7 +333,9 @@ go run ./cmd/cli --config config.local.yaml check run --server-id srv_123 --outp
 
 ### Авторизация
 
-Если `api.auth_token` не пустой, используйте один из вариантов:
+В HTTP-режиме приложение требует `api.auth_token`, если `api.allow_unauthenticated` не установлен в `true`. `config.local.yaml` отключает авторизацию только для локальной разработки.
+
+Когда токен задан, используйте один из вариантов:
 
 ```http
 X-API-Key: <token>
@@ -615,6 +621,7 @@ golangci-lint run
 
 1. HTTP async job history хранится в памяти процесса и очищается после рестарта.
 2. CLI выполняет операции синхронно и не использует HTTP API.
-3. `api.auth_token` лучше всегда задавать явно.
-4. Для production лучше использовать PostgreSQL, а не in-memory storage.
-5. Если `os_type` пустой, система пытается определить ОС удалённого сервера автоматически.
+3. `api.auth_token` задавайте явно; `api.allow_unauthenticated=true` оставляйте только для локальной разработки.
+4. `collector.store_raw_content` по умолчанию выключен, потому что строки логов могут содержать чувствительные данные.
+5. Для production лучше использовать PostgreSQL, а не in-memory storage.
+6. Если `os_type` пустой, система пытается определить ОС удалённого сервера автоматически.

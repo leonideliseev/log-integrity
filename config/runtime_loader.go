@@ -146,7 +146,7 @@ func applyRuntimeDefaults(cfg *Config, mode appmode.Mode) {
 		cfg.Collector.ChunkHashAlgo = "sha256"
 	}
 	if cfg.Collector.StoreRawContent == nil {
-		defaultStoreRawContent := true
+		defaultStoreRawContent := false
 		cfg.Collector.StoreRawContent = &defaultStoreRawContent
 	}
 	if cfg.Health.FailureThreshold == 0 {
@@ -195,6 +195,9 @@ func applyRuntimeDefaults(cfg *Config, mode appmode.Mode) {
 func validateRuntime(cfg *Config, mode appmode.Mode) error {
 	if mode == appmode.HTTP && cfg.Server.Port < 0 {
 		return fmt.Errorf("server.port must be greater than or equal to zero")
+	}
+	if mode == appmode.HTTP && strings.TrimSpace(cfg.API.AuthToken) == "" && !cfg.API.AllowUnauthenticated {
+		return fmt.Errorf("api.auth_token is required unless api.allow_unauthenticated is true")
 	}
 	if cfg.Database.MaxConns < 0 {
 		return fmt.Errorf("database.max_conns must be greater than or equal to zero")

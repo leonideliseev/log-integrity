@@ -50,7 +50,7 @@ func New(cfg *config.Config) (*App, error) {
 	app.apiServer = httptransport.NewServer(
 		address,
 		runtime.Logger,
-		cfg.API.AuthToken,
+		effectiveAPIAuthToken(cfg),
 		runtime.ServerService,
 		runtime.LogFileService,
 		runtime.EntryService,
@@ -67,6 +67,13 @@ func New(cfg *config.Config) (*App, error) {
 	app.runtime.SetSchedulerEnabled(!cfg.Runtime.DryRun)
 
 	return app, nil
+}
+
+func effectiveAPIAuthToken(cfg *config.Config) string {
+	if cfg.API.AllowUnauthenticated {
+		return ""
+	}
+	return cfg.API.AuthToken
 }
 
 // Run starts background jobs and the HTTP API until the context is canceled.

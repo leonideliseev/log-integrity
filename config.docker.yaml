@@ -4,6 +4,7 @@ server:
 
 api:
   auth_token: "${API_AUTH_TOKEN:-}"
+  allow_unauthenticated: ${API_ALLOW_UNAUTHENTICATED:-false}
 
 security:
   auth_value_encryption_key: "${AUTH_VALUE_ENCRYPTION_KEY}"
@@ -34,7 +35,7 @@ scheduler:
 collector:
   batch_size: ${COLLECTOR_BATCH_SIZE:-5000}
   chunk_size: ${COLLECTOR_CHUNK_SIZE:-1000}
-  store_raw_content: ${COLLECTOR_STORE_RAW_CONTENT:-true}
+  store_raw_content: ${COLLECTOR_STORE_RAW_CONTENT:-false}
   chunk_hash_algo: "${COLLECTOR_CHUNK_HASH_ALGO:-sha256}"
 
 health:

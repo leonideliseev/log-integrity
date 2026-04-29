@@ -4,6 +4,7 @@ package integrity
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/lenchik/logmonitor/internal/repository"
@@ -126,19 +127,52 @@ func (s *Service) findTamperedEntries(ctx context.Context, logFileID string, cur
 	if len(chunks) == 0 {
 		return s.findTamperedEntriesByRange(ctx, logFileID, 0, 0, currentByLine)
 	}
+	sort.SliceStable(chunks, func(i, j int) bool {
+		if chunks[i].FromLineNumber == chunks[j].FromLineNumber {
+			return chunks[i].ChunkNumber < chunks[j].ChunkNumber
+		}
+		return chunks[i].FromLineNumber < chunks[j].FromLineNumber
+	})
 
 	tampered := make([]models.TamperedEntry, 0)
+	tamperedLines := make(map[int64]struct{})
+	coveredLines := make(map[int64]struct{})
 	for _, chunk := range chunks {
-		currentHash, ok := s.hashCurrentChunk(currentByLine, chunk)
+		currentHash, ok, storedEntries, err := s.hashCurrentChunk(ctx, logFileID, currentByLine, chunk)
+		if err != nil {
+			return nil, err
+		}
+		for _, entry := range storedEntries {
+			coveredLines[entry.LineNumber] = struct{}{}
+		}
 		if ok && currentHash == chunk.Hash {
 			continue
 		}
 
-		items, err := s.findTamperedEntriesByRange(ctx, logFileID, chunk.FromLineNumber, chunk.ToLineNumber, currentByLine)
+		tampered = appendUniqueTampered(tampered, tamperedLines, s.compareStoredEntries(storedEntries, currentByLine)...)
+	}
+
+	totalEntries, err := s.entries.CountLogEntries(ctx, logFileID)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(coveredLines)) < totalEntries {
+		storedEntries, err := s.entries.ListLogEntries(ctx, logFileID, 0, 0)
 		if err != nil {
 			return nil, err
 		}
-		tampered = append(tampered, items...)
+		uncoveredCapacity := len(storedEntries) - len(coveredLines)
+		if uncoveredCapacity < 0 {
+			uncoveredCapacity = 0
+		}
+		uncoveredEntries := make([]*models.LogEntry, 0, uncoveredCapacity)
+		for _, entry := range storedEntries {
+			if _, ok := coveredLines[entry.LineNumber]; ok {
+				continue
+			}
+			uncoveredEntries = append(uncoveredEntries, entry)
+		}
+		tampered = appendUniqueTampered(tampered, tamperedLines, s.compareStoredEntries(uncoveredEntries, currentByLine)...)
 	}
 
 	return tampered, nil
@@ -156,6 +190,10 @@ func (s *Service) findTamperedEntriesByRange(ctx context.Context, logFileID stri
 		return nil, err
 	}
 
+	return s.compareStoredEntries(storedEntries, currentByLine), nil
+}
+
+func (s *Service) compareStoredEntries(storedEntries []*models.LogEntry, currentByLine map[int64]string) []models.TamperedEntry {
 	tampered := make([]models.TamperedEntry, 0)
 	for _, entry := range storedEntries {
 		currentContent, ok := currentByLine[entry.LineNumber]
@@ -174,25 +212,39 @@ func (s *Service) findTamperedEntriesByRange(ctx context.Context, logFileID stri
 		}
 	}
 
-	return tampered, nil
+	return tampered
 }
 
-func (s *Service) hashCurrentChunk(currentByLine map[int64]string, chunk *models.LogChunk) (string, bool) {
+func (s *Service) hashCurrentChunk(ctx context.Context, logFileID string, currentByLine map[int64]string, chunk *models.LogChunk) (string, bool, []*models.LogEntry, error) {
+	storedEntries, err := s.entries.ListLogEntriesByLineRange(ctx, logFileID, chunk.FromLineNumber, chunk.ToLineNumber)
+	if err != nil {
+		return "", false, nil, err
+	}
+	if len(storedEntries) != chunk.EntriesCount {
+		return "", false, storedEntries, nil
+	}
+
 	builder := strings.Builder{}
-	count := 0
-	for lineNumber := chunk.FromLineNumber; lineNumber <= chunk.ToLineNumber; lineNumber++ {
-		content, ok := currentByLine[lineNumber]
+	for _, entry := range storedEntries {
+		content, ok := currentByLine[entry.LineNumber]
 		if !ok {
-			return "", false
+			return "", false, storedEntries, nil
 		}
 		builder.WriteString(hasher.HashString(content, s.integrityKey))
 		builder.WriteByte('\n')
-		count++
 	}
-	if count != chunk.EntriesCount {
-		return "", false
+	return hasher.SHA256String(builder.String()), true, storedEntries, nil
+}
+
+func appendUniqueTampered(target []models.TamperedEntry, seen map[int64]struct{}, items ...models.TamperedEntry) []models.TamperedEntry {
+	for _, item := range items {
+		if _, ok := seen[item.LineNumber]; ok {
+			continue
+		}
+		seen[item.LineNumber] = struct{}{}
+		target = append(target, item)
 	}
-	return hasher.SHA256String(builder.String()), true
+	return target
 }
 
 // CheckServer runs integrity checks for all provided log files of one server.
