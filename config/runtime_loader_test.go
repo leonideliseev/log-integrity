@@ -3,13 +3,12 @@ package config
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/lenchik/logmonitor/pkg/appmode"
 )
 
-func TestLoadRuntimeForModeRequiresHTTPAuthUnlessExplicitlyAllowed(t *testing.T) {
+func TestLoadRuntimeForModeAllowsHTTPWithoutAuthToken(t *testing.T) {
 	path := writeRuntimeConfig(t, `
 api:
   auth_token: ""
@@ -19,12 +18,8 @@ ssh:
   insecure_ignore_host_key: true
 `)
 
-	_, err := LoadRuntimeForMode(path, appmode.HTTP)
-	if err == nil {
-		t.Fatal("expected HTTP config without auth token to fail")
-	}
-	if !strings.Contains(err.Error(), "api.auth_token") {
-		t.Fatalf("expected auth token validation error, got %v", err)
+	if _, err := LoadRuntimeForMode(path, appmode.HTTP); err != nil {
+		t.Fatalf("expected HTTP config without auth token to load: %v", err)
 	}
 }
 

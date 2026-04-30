@@ -70,10 +70,7 @@ func New(cfg *config.Config) (*App, error) {
 }
 
 func effectiveAPIAuthToken(cfg *config.Config) string {
-	if cfg.API.AllowUnauthenticated {
-		return ""
-	}
-	return cfg.API.AuthToken
+	return ""
 }
 
 // Run starts background jobs and the HTTP API until the context is canceled.
