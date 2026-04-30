@@ -69,7 +69,7 @@ func New(cfg *config.Config) (*App, error) {
 	return app, nil
 }
 
-func effectiveAPIAuthToken(cfg *config.Config) string {
+func effectiveAPIAuthToken(_ *config.Config) string {
 	return ""
 }
 
