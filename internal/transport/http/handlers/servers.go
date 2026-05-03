@@ -95,12 +95,81 @@ func NewServerHandler(service *serverservice.Service, jobs *jobqueue.Manager) *S
 // @Router /api/servers [get]
 // List returns all registered servers.
 func (h *ServerHandler) List(c *gin.Context) {
+	if isPagedListRequest(c, "status", "os_type", "managed_by", "auth_type") {
+		h.listPaged(c)
+		return
+	}
+
 	items, err := h.service.List(c.Request.Context())
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 	c.JSON(http.StatusOK, serverResponses(items))
+}
+
+func (h *ServerHandler) listPaged(c *gin.Context) {
+	offset, limit, err := parsePageQuery(c)
+	if err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	status := trimQuery(c, "status")
+	if err := validateEnum(status, "status", "active", "degraded", "inactive", "error"); err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	osType := trimQuery(c, "os_type")
+	if err := validateEnum(osType, "os_type", "linux", "windows", "macos"); err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	managedBy := trimQuery(c, "managed_by")
+	if err := validateEnum(managedBy, "managed_by", "config", "api"); err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	authType := trimQuery(c, "auth_type")
+	if err := validateEnum(authType, "auth_type", "password", "key"); err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	sortBy := trimQuery(c, "sort")
+	if err := validateEnum(sortBy, "sort", "name", "status", "last_seen", "failures"); err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	order := trimQuery(c, "order")
+	if err := validateEnum(order, "order", "asc", "desc"); err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	page, err := h.service.ListFiltered(c.Request.Context(), repository.ServerListFilter{
+		ListOptions: repository.ListOptions{
+			Q:      trimQuery(c, "q"),
+			Offset: offset,
+			Limit:  limit,
+			Sort:   sortBy,
+			Order:  order,
+		},
+		Status:    models.ServerStatus(status),
+		OSType:    models.OSType(osType),
+		ManagedBy: models.ServerManagedBy(managedBy),
+		AuthType:  models.AuthType(authType),
+	})
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, pageResponse[serverResponse]{
+		Items:  serverResponses(page.Items),
+		Total:  page.Total,
+		Offset: page.Offset,
+		Limit:  page.Limit,
+	})
 }
 
 // Dashboard godoc
@@ -129,12 +198,63 @@ func (h *ServerHandler) Dashboard(c *gin.Context) {
 // @Router /api/problems [get]
 // ListProblems returns aggregated operational issues across servers and log files.
 func (h *ServerHandler) ListProblems(c *gin.Context) {
+	if isPagedListRequest(c, "severity", "type", "server_id") {
+		h.listProblemsPaged(c)
+		return
+	}
+
 	items, err := h.service.ListProblems(c.Request.Context())
 	if err != nil {
 		writeServiceError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, systemProblemResponses(items))
+}
+
+func (h *ServerHandler) listProblemsPaged(c *gin.Context) {
+	offset, limit, err := parsePageQuery(c)
+	if err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	severity := trimQuery(c, "severity")
+	if err := validateEnum(severity, "severity", "warning", "error", "critical"); err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	sortBy := trimQuery(c, "sort")
+	if err := validateEnum(sortBy, "sort", "severity", "detected_at", "server"); err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	order := trimQuery(c, "order")
+	if err := validateEnum(order, "order", "asc", "desc"); err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	page, err := h.service.ListProblemsFiltered(c.Request.Context(), serverservice.ProblemListFilter{
+		ListOptions: repository.ListOptions{
+			Q:      trimQuery(c, "q"),
+			Offset: offset,
+			Limit:  limit,
+			Sort:   sortBy,
+			Order:  order,
+		},
+		Severity: models.ProblemSeverity(severity),
+		Type:     models.ProblemType(trimQuery(c, "type")),
+		ServerID: trimQuery(c, "server_id"),
+	})
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, pageResponse[systemProblemResponse]{
+		Items:  systemProblemResponses(page.Items),
+		Total:  page.Total,
+		Offset: page.Offset,
+		Limit:  page.Limit,
+	})
 }
 
 // Get godoc

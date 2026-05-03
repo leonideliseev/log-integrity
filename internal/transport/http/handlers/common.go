@@ -13,6 +13,7 @@ import (
 )
 
 const maxPageLimit = 1000
+const defaultPageLimit = 50
 
 // writeError sends a uniform JSON error payload to the client.
 func writeError(c *gin.Context, status int, message string) {
@@ -68,6 +69,59 @@ func validatePageLimit(limit int) error {
 		return fmt.Errorf("limit must be less than or equal to %d", maxPageLimit)
 	}
 	return nil
+}
+
+func parsePageQuery(c *gin.Context) (offset int, limit int, err error) {
+	offset, err = parseIntQuery(c, "offset", 0)
+	if err != nil {
+		return 0, 0, err
+	}
+	limit, err = parseIntQuery(c, "limit", defaultPageLimit)
+	if err != nil {
+		return 0, 0, err
+	}
+	if err := validatePageLimit(limit); err != nil {
+		return 0, 0, err
+	}
+	return offset, limit, nil
+}
+
+func isPagedListRequest(c *gin.Context, keys ...string) bool {
+	commonKeys := []string{"q", "offset", "limit", "sort", "order"}
+	for _, key := range append(commonKeys, keys...) {
+		if _, ok := c.GetQuery(key); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func trimQuery(c *gin.Context, key string) string {
+	return strings.TrimSpace(c.Query(key))
+}
+
+func parseBoolQuery(c *gin.Context, key string) (*bool, error) {
+	raw := strings.TrimSpace(c.Query(key))
+	if raw == "" {
+		return nil, nil
+	}
+	value, err := strconv.ParseBool(raw)
+	if err != nil {
+		return nil, fmt.Errorf("%s must be true or false", key)
+	}
+	return &value, nil
+}
+
+func validateEnum(value string, key string, allowed ...string) error {
+	if value == "" {
+		return nil
+	}
+	for _, item := range allowed {
+		if value == item {
+			return nil
+		}
+	}
+	return fmt.Errorf("%s must be one of %s", key, strings.Join(allowed, ", "))
 }
 
 // idempotencyKeyFromHeader extracts an optional client-supplied deduplication key.

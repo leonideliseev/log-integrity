@@ -100,6 +100,58 @@ func (s *Storage) ListActiveLogFiles(_ context.Context) ([]*models.LogFile, erro
 	return items, nil
 }
 
+// ListLogFilesFiltered returns a filtered and paginated log file page.
+func (s *Storage) ListLogFilesFiltered(_ context.Context, filter repository.LogFileListFilter) (repository.Page[*models.LogFile], error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	items := make([]*models.LogFile, 0, len(s.logFiles))
+	for _, item := range s.logFiles {
+		if filter.ServerID != "" && item.ServerID != filter.ServerID {
+			continue
+		}
+		if filter.Active != nil && item.IsActive != *filter.Active {
+			continue
+		}
+		if filter.LogType != "" && item.LogType != filter.LogType {
+			continue
+		}
+		if !matchesSearch(filter.Q, item.ID, item.ServerID, item.Path, string(item.LogType)) {
+			continue
+		}
+		items = append(items, cloneLogFile(item))
+	}
+
+	sort.Slice(items, func(i, j int) bool {
+		less := compareLogFiles(items[i], items[j], filter.Sort)
+		if ascending(filter.Order) {
+			return less
+		}
+		return compareLogFiles(items[j], items[i], filter.Sort)
+	})
+
+	return paged(items, filter.Offset, filter.Limit), nil
+}
+
+func compareLogFiles(left, right *models.LogFile, sortBy string) bool {
+	switch sortBy {
+	case "last_scanned":
+		return timeValue(left.LastScannedAt).Before(timeValue(right.LastScannedAt))
+	case "last_line":
+		if left.LastLineNumber == right.LastLineNumber {
+			return left.Path < right.Path
+		}
+		return left.LastLineNumber < right.LastLineNumber
+	case "created":
+		return left.CreatedAt.Before(right.CreatedAt)
+	default:
+		if left.Path == right.Path {
+			return left.ID < right.ID
+		}
+		return left.Path < right.Path
+	}
+}
+
 // UpdateLogFile overwrites an existing log file model.
 func (s *Storage) UpdateLogFile(_ context.Context, logFile *models.LogFile) error {
 	s.mu.Lock()

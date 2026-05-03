@@ -55,6 +55,59 @@ func (s *Storage) ListCheckResults(_ context.Context, logFileID string, offset, 
 	return paginate(items, offset, limit), nil
 }
 
+// ListCheckResultsFiltered returns a filtered and paginated check result page.
+func (s *Storage) ListCheckResultsFiltered(_ context.Context, filter repository.CheckResultListFilter) (repository.Page[*models.CheckResult], error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	items := make([]*models.CheckResult, 0)
+	for _, item := range s.checks {
+		if filter.LogFileID != "" && item.LogFileID != filter.LogFileID {
+			continue
+		}
+		if filter.Status != "" && item.Status != filter.Status {
+			continue
+		}
+		if filter.Severity != "" && models.SeverityForCheckStatus(item.Status) != filter.Severity {
+			continue
+		}
+		if filter.ProblemType != "" && models.ProblemTypeForCheckStatus(item.Status) != filter.ProblemType {
+			continue
+		}
+		if !matchesSearch(filter.Q, item.ID, item.LogFileID, item.ErrorMessage, string(item.Status)) {
+			continue
+		}
+		items = append(items, cloneCheckResult(item))
+	}
+
+	sort.Slice(items, func(i, j int) bool {
+		less := compareCheckResults(items[i], items[j], filter.Sort)
+		if ascending(filter.Order) {
+			return less
+		}
+		return compareCheckResults(items[j], items[i], filter.Sort)
+	})
+
+	return paged(items, filter.Offset, filter.Limit), nil
+}
+
+func compareCheckResults(left, right *models.CheckResult, sortBy string) bool {
+	switch sortBy {
+	case "status":
+		if left.Status == right.Status {
+			return left.CheckedAt.Before(right.CheckedAt)
+		}
+		return left.Status < right.Status
+	case "tampered_lines":
+		if left.TamperedLines == right.TamperedLines {
+			return left.CheckedAt.Before(right.CheckedAt)
+		}
+		return left.TamperedLines < right.TamperedLines
+	default:
+		return left.CheckedAt.Before(right.CheckedAt)
+	}
+}
+
 // GetLatestCheckResult returns the newest saved result for a log file.
 func (s *Storage) GetLatestCheckResult(_ context.Context, logFileID string) (*models.CheckResult, error) {
 	s.mu.RLock()

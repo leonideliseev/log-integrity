@@ -22,3 +22,8 @@ func NewService(entries repository.LogEntryRepository) *Service {
 func (s *Service) List(ctx context.Context, logFileID string, offset, limit int) ([]*models.LogEntry, error) {
 	return s.entries.ListLogEntries(ctx, logFileID, offset, limit)
 }
+
+// ListFiltered returns a filtered log entry page for API list screens.
+func (s *Service) ListFiltered(ctx context.Context, filter repository.LogEntryListFilter) (repository.Page[*models.LogEntry], error) {
+	return s.entries.ListLogEntriesFiltered(ctx, filter)
+}

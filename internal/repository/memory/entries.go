@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/lenchik/logmonitor/internal/repository"
@@ -67,6 +68,51 @@ func (s *Storage) ListLogEntries(_ context.Context, logFileID string, offset, li
 
 	items := s.listLogEntriesLocked(logFileID)
 	return paginate(items, offset, limit), nil
+}
+
+// ListLogEntriesFiltered returns a filtered and paginated log entry page.
+func (s *Storage) ListLogEntriesFiltered(_ context.Context, filter repository.LogEntryListFilter) (repository.Page[*models.LogEntry], error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	items := make([]*models.LogEntry, 0)
+	for _, item := range s.entries {
+		if filter.LogFileID != "" && item.LogFileID != filter.LogFileID {
+			continue
+		}
+		if filter.FromLine > 0 && item.LineNumber < filter.FromLine {
+			continue
+		}
+		if filter.ToLine > 0 && item.LineNumber > filter.ToLine {
+			continue
+		}
+		if !matchesSearch(filter.Q, item.ID, item.LogFileID, item.Content, item.Hash, strconv.FormatInt(item.LineNumber, 10)) {
+			continue
+		}
+		items = append(items, cloneLogEntry(item))
+	}
+
+	sort.Slice(items, func(i, j int) bool {
+		less := compareLogEntries(items[i], items[j], filter.Sort)
+		if ascending(filter.Order) {
+			return less
+		}
+		return compareLogEntries(items[j], items[i], filter.Sort)
+	})
+
+	return paged(items, filter.Offset, filter.Limit), nil
+}
+
+func compareLogEntries(left, right *models.LogEntry, sortBy string) bool {
+	switch sortBy {
+	case "collected_at":
+		return left.CollectedAt.Before(right.CollectedAt)
+	default:
+		if left.LineNumber == right.LineNumber {
+			return left.ID < right.ID
+		}
+		return left.LineNumber < right.LineNumber
+	}
 }
 
 // ListLogEntriesByLineRange returns entries whose line numbers fit the inclusive range.

@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	jobqueue "github.com/lenchik/logmonitor/internal/jobs"
+	"github.com/lenchik/logmonitor/internal/repository"
 	logfileservice "github.com/lenchik/logmonitor/internal/service/logfile"
 	"github.com/lenchik/logmonitor/models"
 )
@@ -34,6 +35,11 @@ func NewLogFileHandler(service *logfileservice.Service, jobs *jobqueue.Manager) 
 // @Router /api/logfiles [get]
 // List returns active log files or log files of a concrete server.
 func (h *LogFileHandler) List(c *gin.Context) {
+	if isPagedListRequest(c, "active", "log_type") {
+		h.listPaged(c)
+		return
+	}
+
 	serverID := c.Query("server_id")
 	items, err := h.service.List(c.Request.Context(), serverID)
 	if err != nil {
@@ -41,6 +47,52 @@ func (h *LogFileHandler) List(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, logFileResponses(items))
+}
+
+func (h *LogFileHandler) listPaged(c *gin.Context) {
+	offset, limit, err := parsePageQuery(c)
+	if err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	active, err := parseBoolQuery(c, "active")
+	if err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	sortBy := trimQuery(c, "sort")
+	if err := validateEnum(sortBy, "sort", "path", "last_scanned", "last_line", "created"); err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	order := trimQuery(c, "order")
+	if err := validateEnum(order, "order", "asc", "desc"); err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	page, err := h.service.ListFiltered(c.Request.Context(), repository.LogFileListFilter{
+		ListOptions: repository.ListOptions{
+			Q:      trimQuery(c, "q"),
+			Offset: offset,
+			Limit:  limit,
+			Sort:   sortBy,
+			Order:  order,
+		},
+		ServerID: trimQuery(c, "server_id"),
+		Active:   active,
+		LogType:  models.LogType(trimQuery(c, "log_type")),
+	})
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, pageResponse[logFileResponse]{
+		Items:  logFileResponses(page.Items),
+		Total:  page.Total,
+		Offset: page.Offset,
+		Limit:  page.Limit,
+	})
 }
 
 // Collect godoc

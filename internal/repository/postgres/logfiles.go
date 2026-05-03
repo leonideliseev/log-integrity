@@ -217,6 +217,76 @@ func (s *Storage) ListActiveLogFiles(ctx context.Context) ([]*models.LogFile, er
 	return items, nil
 }
 
+// ListLogFilesFiltered returns a filtered and paginated log file page.
+func (s *Storage) ListLogFilesFiltered(ctx context.Context, filter repository.LogFileListFilter) (repository.Page[*models.LogFile], error) {
+	filter.ListOptions = normalizePage(filter.ListOptions)
+
+	sqlFilter := sqlFilter{}
+	if filter.ServerID != "" {
+		sqlFilter.add("server_id = $%d", filter.ServerID)
+	}
+	if filter.Active != nil {
+		sqlFilter.add("is_active = $%d", *filter.Active)
+	}
+	if filter.LogType != "" {
+		sqlFilter.add("log_type = $%d", string(filter.LogType))
+	}
+	sqlFilter.addSearch([]string{"id", "server_id", "path", "log_type"}, filter.Q)
+
+	var total int
+	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM log_files`+sqlFilter.whereSQL(), sqlFilter.args...).Scan(&total); err != nil {
+		return repository.Page[*models.LogFile]{}, fmt.Errorf("postgres: count filtered log files: %w", err)
+	}
+
+	args := append([]any{}, sqlFilter.args...)
+	args = append(args, filter.Offset, filter.Limit)
+	orderSQL := orderBy(filter.Sort, map[string]string{
+		"path":         "path",
+		"last_scanned": "last_scanned_at",
+		"last_line":    "last_line_number",
+		"created":      "created_at",
+	}, "path", filter.Order, "ASC")
+	rows, err := s.pool.Query(
+		ctx,
+		`SELECT id, server_id, path, log_type, file_identity, meta, last_scanned_at, last_line_number, last_byte_offset, is_active, created_at
+		 FROM log_files`+sqlFilter.whereSQL()+orderSQL+fmt.Sprintf(", id ASC OFFSET $%d LIMIT $%d", len(args)-1, len(args)),
+		args...,
+	)
+	if err != nil {
+		return repository.Page[*models.LogFile]{}, fmt.Errorf("postgres: list filtered log files: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]*models.LogFile, 0)
+	for rows.Next() {
+		var logFile models.LogFile
+		var logType string
+		var fileIdentity []byte
+		var meta []byte
+		var lastScannedAt pgtype.Timestamptz
+		if err := rows.Scan(
+			&logFile.ID, &logFile.ServerID, &logFile.Path, &logType, &fileIdentity, &meta,
+			&lastScannedAt, &logFile.LastLineNumber, &logFile.LastByteOffset, &logFile.IsActive, &logFile.CreatedAt,
+		); err != nil {
+			return repository.Page[*models.LogFile]{}, fmt.Errorf("postgres: scan filtered log file: %w", err)
+		}
+		logFile.LogType = models.LogType(logType)
+		logFile.LastScannedAt = nullableTime(lastScannedAt)
+		if err := decodeJSON(fileIdentity, &logFile.FileIdentity); err != nil {
+			return repository.Page[*models.LogFile]{}, err
+		}
+		if err := decodeJSON(meta, &logFile.Meta); err != nil {
+			return repository.Page[*models.LogFile]{}, err
+		}
+		items = append(items, cloneLogFile(&logFile))
+	}
+	if err := rows.Err(); err != nil {
+		return repository.Page[*models.LogFile]{}, fmt.Errorf("postgres: iterate filtered log files: %w", err)
+	}
+
+	return repository.Page[*models.LogFile]{Items: items, Total: total, Offset: filter.Offset, Limit: filter.Limit}, nil
+}
+
 // UpdateLogFile overwrites an existing log file model.
 func (s *Storage) UpdateLogFile(ctx context.Context, logFile *models.LogFile) error {
 	current, err := s.GetLogFileByID(ctx, logFile.ID)

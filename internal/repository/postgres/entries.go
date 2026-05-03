@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/lenchik/logmonitor/internal/repository"
 	"github.com/lenchik/logmonitor/models"
 )
 
@@ -185,6 +186,59 @@ func (s *Storage) ListLogEntries(ctx context.Context, logFileID string, offset, 
 	}
 
 	return items, nil
+}
+
+// ListLogEntriesFiltered returns a filtered and paginated log entry page.
+func (s *Storage) ListLogEntriesFiltered(ctx context.Context, filter repository.LogEntryListFilter) (repository.Page[*models.LogEntry], error) {
+	filter.ListOptions = normalizePage(filter.ListOptions)
+
+	sqlFilter := sqlFilter{}
+	if filter.LogFileID != "" {
+		sqlFilter.add("log_file_id = $%d", filter.LogFileID)
+	}
+	if filter.FromLine > 0 {
+		sqlFilter.add("line_number >= $%d", filter.FromLine)
+	}
+	if filter.ToLine > 0 {
+		sqlFilter.add("line_number <= $%d", filter.ToLine)
+	}
+	sqlFilter.addSearch([]string{"id", "log_file_id", "content", "hash", "line_number::text"}, filter.Q)
+
+	var total int
+	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM log_entries`+sqlFilter.whereSQL(), sqlFilter.args...).Scan(&total); err != nil {
+		return repository.Page[*models.LogEntry]{}, fmt.Errorf("postgres: count filtered log entries: %w", err)
+	}
+
+	args := append([]any{}, sqlFilter.args...)
+	args = append(args, filter.Offset, filter.Limit)
+	orderSQL := orderBy(filter.Sort, map[string]string{
+		"line_number":  "line_number",
+		"collected_at": "collected_at",
+	}, "line_number", filter.Order, "ASC")
+	rows, err := s.pool.Query(
+		ctx,
+		`SELECT id, log_file_id, line_number, content, hash, collected_at
+		 FROM log_entries`+sqlFilter.whereSQL()+orderSQL+fmt.Sprintf(", id ASC OFFSET $%d LIMIT $%d", len(args)-1, len(args)),
+		args...,
+	)
+	if err != nil {
+		return repository.Page[*models.LogEntry]{}, fmt.Errorf("postgres: list filtered log entries: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]*models.LogEntry, 0)
+	for rows.Next() {
+		var entry models.LogEntry
+		if err := rows.Scan(&entry.ID, &entry.LogFileID, &entry.LineNumber, &entry.Content, &entry.Hash, &entry.CollectedAt); err != nil {
+			return repository.Page[*models.LogEntry]{}, fmt.Errorf("postgres: scan filtered log entry: %w", err)
+		}
+		items = append(items, cloneLogEntry(&entry))
+	}
+	if err := rows.Err(); err != nil {
+		return repository.Page[*models.LogEntry]{}, fmt.Errorf("postgres: iterate filtered log entries: %w", err)
+	}
+
+	return repository.Page[*models.LogEntry]{Items: items, Total: total, Offset: filter.Offset, Limit: filter.Limit}, nil
 }
 
 // ListLogEntriesByLineRange returns entries whose line numbers fit the inclusive range.

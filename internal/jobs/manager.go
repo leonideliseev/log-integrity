@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lenchik/logmonitor/internal/repository"
 	"github.com/lenchik/logmonitor/models"
 )
 
@@ -36,6 +38,10 @@ type ListFilter struct {
 	Status    models.JobStatus
 	ServerID  string
 	LogFileID string
+	Q         string
+	HasError  *bool
+	Sort      string
+	Order     string
 	Offset    int
 	Limit     int
 }
@@ -231,6 +237,15 @@ func (m *Manager) GetJob(jobID string) (*models.Job, error) {
 
 // ListJobs returns filtered job history ordered from newest to oldest.
 func (m *Manager) ListJobs(filter ListFilter) ([]*models.Job, error) {
+	page, err := m.ListJobsPage(filter)
+	if err != nil {
+		return nil, err
+	}
+	return page.Items, nil
+}
+
+// ListJobsPage returns filtered job history with total count and pagination metadata.
+func (m *Manager) ListJobsPage(filter ListFilter) (repository.Page[*models.Job], error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -242,16 +257,17 @@ func (m *Manager) ListJobs(filter ListFilter) ([]*models.Job, error) {
 		}
 		matches = append(matches, cloneJob(job))
 	}
+	sortJobs(matches, filter.Sort, filter.Order)
 
 	if filter.Offset >= len(matches) {
-		return []*models.Job{}, nil
+		return repository.Page[*models.Job]{Items: []*models.Job{}, Total: len(matches), Offset: filter.Offset, Limit: filter.Limit}, nil
 	}
 	start := filter.Offset
 	end := len(matches)
 	if filter.Limit > 0 && start+filter.Limit < end {
 		end = start + filter.Limit
 	}
-	return matches[start:end], nil
+	return repository.Page[*models.Job]{Items: matches[start:end], Total: len(matches), Offset: filter.Offset, Limit: filter.Limit}, nil
 }
 
 // worker executes queued tasks and persists status transitions in history.
@@ -413,7 +429,59 @@ func matchesFilter(job *models.Job, filter ListFilter) bool {
 	if filter.LogFileID != "" && job.LogFileID != filter.LogFileID {
 		return false
 	}
+	if filter.HasError != nil && (job.Error != "") != *filter.HasError {
+		return false
+	}
+	if !matchesJobQuery(job, filter.Q) {
+		return false
+	}
 	return true
+}
+
+func matchesJobQuery(job *models.Job, query string) bool {
+	query = strings.ToLower(strings.TrimSpace(query))
+	if query == "" {
+		return true
+	}
+	values := []string{job.ID, string(job.Type), string(job.Status), job.ServerID, job.LogFileID, job.Error, job.IdempotencyKey, job.Fingerprint}
+	for _, value := range values {
+		if strings.Contains(strings.ToLower(value), query) {
+			return true
+		}
+	}
+	return false
+}
+
+func sortJobs(items []*models.Job, sortBy string, order string) {
+	asc := strings.EqualFold(order, "asc")
+	sort.SliceStable(items, func(i, j int) bool {
+		less := compareJobs(items[i], items[j], sortBy)
+		if asc {
+			return less
+		}
+		return compareJobs(items[j], items[i], sortBy)
+	})
+}
+
+func compareJobs(left, right *models.Job, sortBy string) bool {
+	switch sortBy {
+	case "status":
+		if left.Status == right.Status {
+			return left.CreatedAt.Before(right.CreatedAt)
+		}
+		return left.Status < right.Status
+	case "finished_at":
+		return timePtrValue(left.FinishedAt).Before(timePtrValue(right.FinishedAt))
+	default:
+		return left.CreatedAt.Before(right.CreatedAt)
+	}
+}
+
+func timePtrValue(value *time.Time) time.Time {
+	if value == nil {
+		return time.Time{}
+	}
+	return *value
 }
 
 // isTerminalJobStatus reports whether a job already completed and can be trimmed from history.

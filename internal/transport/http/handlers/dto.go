@@ -103,6 +103,13 @@ type dashboardResponse struct {
 	RecentProblems []systemProblemResponse  `json:"recent_problems"`
 }
 
+type pageResponse[T any] struct {
+	Items  []T `json:"items"`
+	Total  int `json:"total"`
+	Offset int `json:"offset"`
+	Limit  int `json:"limit"`
+}
+
 type dashboardServerCounters struct {
 	Total    int `json:"total"`
 	Active   int `json:"active"`

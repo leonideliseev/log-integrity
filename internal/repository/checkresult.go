@@ -12,5 +12,6 @@ type CheckResultRepository interface {
 	CreateCheckResult(ctx context.Context, result *models.CheckResult) error
 	GetCheckResultByID(ctx context.Context, id string) (*models.CheckResult, error)
 	ListCheckResults(ctx context.Context, logFileID string, offset, limit int) ([]*models.CheckResult, error)
+	ListCheckResultsFiltered(ctx context.Context, filter CheckResultListFilter) (Page[*models.CheckResult], error)
 	GetLatestCheckResult(ctx context.Context, logFileID string) (*models.CheckResult, error)
 }

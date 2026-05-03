@@ -4,8 +4,10 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/lenchik/logmonitor/internal/repository"
 	"github.com/lenchik/logmonitor/models"
 )
 
@@ -90,4 +92,42 @@ func paginate[T any](items []T, offset, limit int) []T {
 	result := make([]T, limit)
 	copy(result, items[offset:offset+limit])
 	return result
+}
+
+func paged[T any](items []T, offset, limit int) repository.Page[T] {
+	total := len(items)
+	return repository.Page[T]{
+		Items:  paginate(items, offset, limit),
+		Total:  total,
+		Offset: normalizeOffset(offset),
+		Limit:  limit,
+	}
+}
+
+func normalizeOffset(offset int) int {
+	if offset < 0 {
+		return 0
+	}
+	return offset
+}
+
+func normalizedSearch(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
+}
+
+func matchesSearch(query string, values ...string) bool {
+	query = normalizedSearch(query)
+	if query == "" {
+		return true
+	}
+	for _, value := range values {
+		if strings.Contains(normalizedSearch(value), query) {
+			return true
+		}
+	}
+	return false
+}
+
+func ascending(order string) bool {
+	return strings.EqualFold(strings.TrimSpace(order), "asc")
 }

@@ -61,6 +61,11 @@ func (s *Service) List(ctx context.Context, logFileID string, offset, limit int)
 	return s.checks.ListCheckResults(ctx, logFileID, offset, limit)
 }
 
+// ListFiltered returns a filtered check result page for API list screens.
+func (s *Service) ListFiltered(ctx context.Context, filter repository.CheckResultListFilter) (repository.Page[*models.CheckResult], error) {
+	return s.checks.ListCheckResultsFiltered(ctx, filter)
+}
+
 // Run launches integrity checks for one log file or for all server log files.
 func (s *Service) Run(ctx context.Context, serverID, logFileID string) (map[string]RunResult, error) {
 	serverModel, err := s.servers.GetServerByID(ctx, serverID)

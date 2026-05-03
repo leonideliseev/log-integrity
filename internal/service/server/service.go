@@ -91,6 +91,11 @@ func (s *Service) List(ctx context.Context) ([]*models.Server, error) {
 	return s.servers.ListServers(ctx)
 }
 
+// ListFiltered returns a filtered server page for API list screens.
+func (s *Service) ListFiltered(ctx context.Context, filter repository.ServerListFilter) (repository.Page[*models.Server], error) {
+	return s.servers.ListServersFiltered(ctx, filter)
+}
+
 // Get returns one registered server by identifier.
 func (s *Service) Get(ctx context.Context, serverID string) (*models.Server, error) {
 	return s.servers.GetServerByID(ctx, serverID)
@@ -295,6 +300,107 @@ func (s *Service) ListProblems(ctx context.Context) ([]models.SystemProblem, err
 	})
 
 	return problems, nil
+}
+
+// ListProblemsFiltered returns a filtered problem page for API list screens.
+func (s *Service) ListProblemsFiltered(ctx context.Context, filter ProblemListFilter) (repository.Page[models.SystemProblem], error) {
+	problems, err := s.ListProblems(ctx)
+	if err != nil {
+		return repository.Page[models.SystemProblem]{}, err
+	}
+
+	filtered := make([]models.SystemProblem, 0, len(problems))
+	for _, problem := range problems {
+		if filter.Severity != "" && problem.Severity != filter.Severity {
+			continue
+		}
+		if filter.Type != "" && problem.Type != filter.Type {
+			continue
+		}
+		if filter.ServerID != "" && problem.ServerID != filter.ServerID {
+			continue
+		}
+		if !problemMatchesQuery(problem, filter.Q) {
+			continue
+		}
+		filtered = append(filtered, problem)
+	}
+
+	sort.SliceStable(filtered, func(i, j int) bool {
+		less := compareProblems(filtered[i], filtered[j], filter.Sort)
+		if strings.EqualFold(filter.Order, "asc") {
+			return less
+		}
+		return compareProblems(filtered[j], filtered[i], filter.Sort)
+	})
+
+	offset := filter.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	end := len(filtered)
+	if offset >= len(filtered) {
+		return repository.Page[models.SystemProblem]{Items: []models.SystemProblem{}, Total: len(filtered), Offset: offset, Limit: limit}, nil
+	}
+	if offset+limit < end {
+		end = offset + limit
+	}
+	return repository.Page[models.SystemProblem]{
+		Items:  append([]models.SystemProblem{}, filtered[offset:end]...),
+		Total:  len(filtered),
+		Offset: offset,
+		Limit:  limit,
+	}, nil
+}
+
+// ProblemListFilter narrows aggregated problem list reads.
+type ProblemListFilter struct {
+	repository.ListOptions
+	Severity models.ProblemSeverity
+	Type     models.ProblemType
+	ServerID string
+}
+
+func problemMatchesQuery(problem models.SystemProblem, query string) bool {
+	query = strings.ToLower(strings.TrimSpace(query))
+	if query == "" {
+		return true
+	}
+	values := []string{string(problem.Severity), string(problem.Type), problem.ServerID, problem.ServerName, problem.LogFileID, problem.LogPath, problem.Message}
+	for _, value := range values {
+		if strings.Contains(strings.ToLower(value), query) {
+			return true
+		}
+	}
+	return false
+}
+
+func compareProblems(left, right models.SystemProblem, sortBy string) bool {
+	switch sortBy {
+	case "detected_at":
+		return left.DetectedAt.Before(right.DetectedAt)
+	case "server":
+		leftServer := left.ServerName
+		if leftServer == "" {
+			leftServer = left.ServerID
+		}
+		rightServer := right.ServerName
+		if rightServer == "" {
+			rightServer = right.ServerID
+		}
+		return leftServer < rightServer
+	default:
+		leftRank := severityRank(left.Severity)
+		rightRank := severityRank(right.Severity)
+		if leftRank == rightRank {
+			return left.DetectedAt.Before(right.DetectedAt)
+		}
+		return leftRank < rightRank
+	}
 }
 
 // Discover runs discovery for one server or for all servers.

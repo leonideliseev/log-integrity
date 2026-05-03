@@ -60,6 +60,11 @@ func (s *Service) List(ctx context.Context, serverID string) ([]*models.LogFile,
 	return s.logFiles.ListLogFilesByServer(ctx, serverID)
 }
 
+// ListFiltered returns a filtered log file page for API list screens.
+func (s *Service) ListFiltered(ctx context.Context, filter repository.LogFileListFilter) (repository.Page[*models.LogFile], error) {
+	return s.logFiles.ListLogFilesFiltered(ctx, filter)
+}
+
 // Collect reads remote log files and persists newly discovered entries.
 func (s *Service) Collect(ctx context.Context, serverID, logFileID string) (map[string]CollectResult, error) {
 	serverModel, err := s.servers.GetServerByID(ctx, serverID)

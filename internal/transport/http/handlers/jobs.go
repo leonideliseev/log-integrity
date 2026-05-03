@@ -36,6 +36,11 @@ func NewJobHandler(jobs *jobqueue.Manager) *JobHandler {
 // @Router /api/jobs [get]
 // List returns queued, running and completed jobs with lightweight filtering.
 func (h *JobHandler) List(c *gin.Context) {
+	if isPagedListRequest(c, "q", "has_error") {
+		h.listPaged(c)
+		return
+	}
+
 	offset, err := parseIntQuery(c, "offset", 0)
 	if err != nil {
 		writeError(c, http.StatusBadRequest, err.Error())
@@ -63,6 +68,50 @@ func (h *JobHandler) List(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, jobResponses(items))
+}
+
+func (h *JobHandler) listPaged(c *gin.Context) {
+	offset, limit, err := parsePageQuery(c)
+	if err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	filter, err := parseJobListFilter(c, offset, limit)
+	if err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	hasError, err := parseBoolQuery(c, "has_error")
+	if err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	sortBy := trimQuery(c, "sort")
+	if err := validateEnum(sortBy, "sort", "created_at", "finished_at", "status"); err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	order := trimQuery(c, "order")
+	if err := validateEnum(order, "order", "asc", "desc"); err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	filter.Q = trimQuery(c, "q")
+	filter.HasError = hasError
+	filter.Sort = sortBy
+	filter.Order = order
+
+	page, err := h.jobs.ListJobsPage(filter)
+	if err != nil {
+		writeJobError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, pageResponse[jobResponse]{
+		Items:  jobResponses(page.Items),
+		Total:  page.Total,
+		Offset: page.Offset,
+		Limit:  page.Limit,
+	})
 }
 
 // Get godoc

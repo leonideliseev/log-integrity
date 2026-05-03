@@ -77,6 +77,86 @@ func (s *Storage) ListServers(_ context.Context) ([]*models.Server, error) {
 	return items, nil
 }
 
+// ListServersFiltered returns a filtered and paginated server page.
+func (s *Storage) ListServersFiltered(_ context.Context, filter repository.ServerListFilter) (repository.Page[*models.Server], error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	items := make([]*models.Server, 0, len(s.servers))
+	for _, item := range s.servers {
+		if filter.Status != "" && item.Status != filter.Status {
+			continue
+		}
+		if filter.OSType != "" && item.OSType != filter.OSType {
+			continue
+		}
+		if filter.ManagedBy != "" && item.ManagedBy != filter.ManagedBy {
+			continue
+		}
+		if filter.AuthType != "" && item.AuthType != filter.AuthType {
+			continue
+		}
+		if !matchesSearch(filter.Q, item.ID, item.Name, item.Host, item.Username, item.LastError) {
+			continue
+		}
+		items = append(items, cloneServer(item))
+	}
+
+	sort.Slice(items, func(i, j int) bool {
+		less := compareServers(items[i], items[j], filter.Sort)
+		if ascending(filter.Order) {
+			return less
+		}
+		return compareServers(items[j], items[i], filter.Sort)
+	})
+
+	return paged(items, filter.Offset, filter.Limit), nil
+}
+
+func compareServers(left, right *models.Server, sortBy string) bool {
+	switch sortBy {
+	case "status":
+		if left.Status == right.Status {
+			return left.Name < right.Name
+		}
+		return serverStatusRank(left.Status) < serverStatusRank(right.Status)
+	case "last_seen":
+		return timeValue(left.LastSeenAt).Before(timeValue(right.LastSeenAt))
+	case "failures":
+		if left.FailureCount == right.FailureCount {
+			return left.Name < right.Name
+		}
+		return left.FailureCount < right.FailureCount
+	default:
+		if left.Name == right.Name {
+			return left.ID < right.ID
+		}
+		return left.Name < right.Name
+	}
+}
+
+func serverStatusRank(status models.ServerStatus) int {
+	switch status {
+	case models.ServerStatusActive:
+		return 1
+	case models.ServerStatusInactive:
+		return 2
+	case models.ServerStatusDegraded:
+		return 3
+	case models.ServerStatusError:
+		return 4
+	default:
+		return 0
+	}
+}
+
+func timeValue(value *time.Time) time.Time {
+	if value == nil {
+		return time.Time{}
+	}
+	return *value
+}
+
 // UpdateServer overwrites an existing server model.
 func (s *Storage) UpdateServer(_ context.Context, serverModel *models.Server) error {
 	s.mu.Lock()

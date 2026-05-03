@@ -8,6 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	jobqueue "github.com/lenchik/logmonitor/internal/jobs"
+	"github.com/lenchik/logmonitor/internal/repository"
 	checkservice "github.com/lenchik/logmonitor/internal/service/check"
 	"github.com/lenchik/logmonitor/models"
 )
@@ -37,6 +38,11 @@ func NewCheckHandler(service *checkservice.Service, jobs *jobqueue.Manager) *Che
 // @Router /api/checks [get]
 // List returns stored integrity check results for a log file.
 func (h *CheckHandler) List(c *gin.Context) {
+	if isPagedListRequest(c, "status", "severity", "problem_type") {
+		h.listPaged(c)
+		return
+	}
+
 	logFileID := c.Query("log_file_id")
 	if logFileID == "" {
 		writeError(c, http.StatusBadRequest, "log_file_id is required")
@@ -64,6 +70,63 @@ func (h *CheckHandler) List(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, checkResultResponses(items))
+}
+
+func (h *CheckHandler) listPaged(c *gin.Context) {
+	logFileID := trimQuery(c, "log_file_id")
+	if logFileID == "" {
+		writeError(c, http.StatusBadRequest, "log_file_id is required")
+		return
+	}
+	offset, limit, err := parsePageQuery(c)
+	if err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	status := trimQuery(c, "status")
+	if err := validateEnum(status, "status", "ok", "tampered", "error"); err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	severity := trimQuery(c, "severity")
+	if err := validateEnum(severity, "severity", "warning", "error", "critical"); err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	sortBy := trimQuery(c, "sort")
+	if err := validateEnum(sortBy, "sort", "checked_at", "status", "tampered_lines"); err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	order := trimQuery(c, "order")
+	if err := validateEnum(order, "order", "asc", "desc"); err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	page, err := h.service.ListFiltered(c.Request.Context(), repository.CheckResultListFilter{
+		ListOptions: repository.ListOptions{
+			Q:      trimQuery(c, "q"),
+			Offset: offset,
+			Limit:  limit,
+			Sort:   sortBy,
+			Order:  order,
+		},
+		LogFileID:   logFileID,
+		Status:      models.CheckStatus(status),
+		Severity:    models.ProblemSeverity(severity),
+		ProblemType: models.ProblemType(trimQuery(c, "problem_type")),
+	})
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, pageResponse[checkResultResponse]{
+		Items:  checkResultResponses(page.Items),
+		Total:  page.Total,
+		Offset: page.Offset,
+		Limit:  page.Limit,
+	})
 }
 
 // Run godoc

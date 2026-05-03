@@ -7,6 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/lenchik/logmonitor/internal/repository"
 	"github.com/lenchik/logmonitor/models"
 )
 
@@ -181,6 +182,84 @@ func (s *Storage) ListServers(ctx context.Context) ([]*models.Server, error) {
 	}
 
 	return items, nil
+}
+
+// ListServersFiltered returns a filtered and paginated server page.
+func (s *Storage) ListServersFiltered(ctx context.Context, filter repository.ServerListFilter) (repository.Page[*models.Server], error) {
+	filter.ListOptions = normalizePage(filter.ListOptions)
+
+	sqlFilter := sqlFilter{}
+	if filter.Status != "" {
+		sqlFilter.add("status = $%d", string(filter.Status))
+	}
+	if filter.OSType != "" {
+		sqlFilter.add("os_type = $%d", string(filter.OSType))
+	}
+	if filter.ManagedBy != "" {
+		sqlFilter.add("managed_by = $%d", string(filter.ManagedBy))
+	}
+	if filter.AuthType != "" {
+		sqlFilter.add("auth_type = $%d", string(filter.AuthType))
+	}
+	sqlFilter.addSearch([]string{"id", "name", "host", "username", "last_error"}, filter.Q)
+
+	var total int
+	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM servers`+sqlFilter.whereSQL(), sqlFilter.args...).Scan(&total); err != nil {
+		return repository.Page[*models.Server]{}, fmt.Errorf("postgres: count filtered servers: %w", err)
+	}
+
+	args := append([]any{}, sqlFilter.args...)
+	args = append(args, filter.Offset, filter.Limit)
+	orderSQL := orderBy(filter.Sort, map[string]string{
+		"name":      "name",
+		"status":    "status",
+		"last_seen": "last_seen_at",
+		"failures":  "failure_count",
+	}, "name", filter.Order, "ASC")
+	rows, err := s.pool.Query(
+		ctx,
+		`SELECT id, name, host, port, username, auth_type, auth_value, os_type, status, managed_by, success_count, failure_count, last_error, last_seen_at, backoff_until, created_at, updated_at
+		 FROM servers`+sqlFilter.whereSQL()+orderSQL+fmt.Sprintf(", id ASC OFFSET $%d LIMIT $%d", len(args)-1, len(args)),
+		args...,
+	)
+	if err != nil {
+		return repository.Page[*models.Server]{}, fmt.Errorf("postgres: list filtered servers: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]*models.Server, 0)
+	for rows.Next() {
+		var serverModel models.Server
+		var authType string
+		var osType string
+		var status string
+		var managedBy string
+		var lastSeenAt pgtype.Timestamptz
+		var backoffUntil pgtype.Timestamptz
+		if err := rows.Scan(
+			&serverModel.ID, &serverModel.Name, &serverModel.Host, &serverModel.Port, &serverModel.Username,
+			&authType, &serverModel.AuthValue, &osType, &status, &managedBy, &serverModel.SuccessCount,
+			&serverModel.FailureCount, &serverModel.LastError, &lastSeenAt, &backoffUntil, &serverModel.CreatedAt,
+			&serverModel.UpdatedAt,
+		); err != nil {
+			return repository.Page[*models.Server]{}, fmt.Errorf("postgres: scan filtered server: %w", err)
+		}
+		serverModel.AuthType = models.AuthType(authType)
+		serverModel.OSType = models.OSType(osType)
+		serverModel.Status = models.ServerStatus(status)
+		serverModel.ManagedBy = normalizeServerManagedBy(managedBy)
+		serverModel.LastSeenAt = nullableTime(lastSeenAt)
+		serverModel.BackoffUntil = nullableTime(backoffUntil)
+		if err := s.decryptServerAuthValue(&serverModel); err != nil {
+			return repository.Page[*models.Server]{}, err
+		}
+		items = append(items, cloneServer(&serverModel))
+	}
+	if err := rows.Err(); err != nil {
+		return repository.Page[*models.Server]{}, fmt.Errorf("postgres: iterate filtered servers: %w", err)
+	}
+
+	return repository.Page[*models.Server]{Items: items, Total: total, Offset: filter.Offset, Limit: filter.Limit}, nil
 }
 
 // UpdateServer overwrites an existing server model.
